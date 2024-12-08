@@ -8,7 +8,7 @@ import java.util.Date
 /**
  * 流程控制, 高级函数
  */
-object Lesson01 {
+object Lesson01_Functions {
 
   // 成员方法
   def other(): Unit = {

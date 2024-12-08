@@ -7,7 +7,7 @@ import scala.collection.mutable.ListBuffer
 /**
  * Scala Collections
  */
-object Lesson_Collections {
+object Lesson02_Collections {
 
   def main(args: Array[String]): Unit = {
     // 你是一个 JavaCoder
