@@ -1,0 +1,95 @@
+[Scia Reto](https://sciareto.org) mind map   
+> __version__=`1.1`,generatorId=`com.igormaznitsa:idea-mindmap:intellij-2024.17.0-IntelliJ IDEA`
+---
+
+# Spark\-CORE
+> align=`center`
+
+
+## 术语
+
+### Application
+
+#### 启动一个 MapReduce 程序, 其实是启动了一个分布式计算程序, 最小的描述单词
+
+### Job
+
+#### 启动了一个分布式计算程序, 其实就是间接启动了一个 Job, 在一个 Job 中只有两个阶段
+
+### Stage
+
+#### 一个线性的过程, 在一个阶段中会有一些列并行的 Task
+
+#### MapStage
+
+#### ReduceStage
+
+### Task
+
+#### MapTask\(若干\)
+
+##### 1\.Input
+
+###### 2\.map\(\),filter
+
+####### 3\.output, file, local
+
+####  ReduceTask\(若干\)
+
+##### 1\.Input\(迭代器\)
+
+###### 2\.reduce\(\), reduceByKey\(嵌套迭代器\)
+
+####### 3\.output
+
+### 比例 : <br/>1@App : 1@Job<br/>1@Job : 1\-2@Stage<br/>1@Stage : N@Task
+
+#### 如果代码中只做过滤不做统计, 可能没有 Reduce
+
+### 多个 MR 的 Job 可以组成作业链
+
+### InpoutFormat
+
+#### TextInputFormat
+
+##### InputFormat 的子类实现, 默认处理文本的类, 这个类有两个地方可以使用到
+
+##### 1\.Client 中计算 splits 的数量, 间接计算 Map 数量
+
+##### 2\.MapTask 中输入格式化类得到 LineRecordReader\(行记录读取器\)
+
+## 架构
+
+## 应用
+
+### 编程模型
+
+#### RDD
+
+##### A Resilient Distributed Dataset
+
+###### HadoopRDD
+
+####### 文件数据输入
+
+###### MapPartitionsRDD
+
+##### A list of partitions SPLITS
+
+###### HadoopRDD
+
+####### getPartitions
+
+##### A function for computing each split
+
+###### HadoopRDD
+
+####### compute\(Partition\)
+
+##### A list of dependencies on other RDDs
+
+##### a Partitioner for key\-value RDDs
+
+##### a list of preferred locations to compute each split
+
+## 源码
