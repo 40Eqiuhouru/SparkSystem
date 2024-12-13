@@ -7,11 +7,11 @@ import org.apache.spark.{SparkConf, SparkContext}
  * Spark RDD API<br>
  * <p>DataSet-Oriented Operations :
  * <ol>
- *   <li>A Single Element : union(), cartesion(). no function compute.</li>
- *   <li>KV Element : cogroup(), join(). no function compute.</li>
+ *   <li>A Single Element : {{{union(), cartesion()}}}. no function compute.</li>
+ *   <li>KV Element : {{{cogroup(), join()}}}. no function compute.</li>
  *   <li>Sort.</li>
- *   <li>Aggregate compute : reduceByKey(), combinerByKey(). Have function.</li>
- *   <li>Non-aggregates with functions : map(), flatMap().</li>
+ *   <li>Aggregate compute : {{{reduceByKey(), combinerByKey()}}}. Have function.</li>
+ *   <li>Non-aggregates with functions : {{{map(), flatMap()}}}.</li>
  * </ol>
  * <p>CoGroup
  * <p>combinerByKey()

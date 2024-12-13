@@ -1166,6 +1166,10 @@ override def getDependencies: Seq[Dependency[_]] = {
 
 图解详见 Idea 工程中 image 目录。
 
+------
+
+
+
 ## 章节7：Spark-CORE，集合操作 API，pvuv 分析，RDD 源码分析
 
 **1.Spark_RDD_API_Example**
@@ -1687,3 +1691,414 @@ Idea 运行结果：
 ###### 第二个问题：take() 是执行算子，take() 了两次，但是它返回的数据没错，就是五条，但是应该是两个 Job，为什么最终 6 个 Job？。
 
 **sortByKey() 不做计算，会先跑一次对数据的抽样，样本抽出来后，先划分格子，把各自准备好后，才能真正去跑抽取所有数据并放到正确的格子中，这个结果才是全排序。**
+
+------
+
+## 章节8：Spark-CORE，聚合计算 API，combineByKey()，分区调优
+
+**1.Spark RDD Aggregator Compute**
+
+```scala
+package com.syndra.bigdata.spark
+
+import org.apache.spark.rdd.RDD
+import org.apache.spark.{SparkConf, SparkContext}
+
+/**
+ * Spark RDD Aggregator Compute
+ */
+object Lesson03_RDD_Aggregator {
+  def main(args: Array[String]): Unit = {
+    val conf = new SparkConf().setMaster("local").setAppName("test")
+    val sc = new SparkContext(conf)
+    sc.setLogLevel("ERROR")
+
+    val data: RDD[(String, Int)] = sc.parallelize(List(
+      ("Syndra", 123),
+      ("Syndra", 456),
+      ("Syndra", 789),
+      ("NingHY", 321),
+      ("NingHY", 654),
+      ("NingHY", 987),
+      ("WangZX", 135),
+      ("WangZX", 246),
+      ("WangZX", 357)
+    ))
+
+    // 当有 key 的情况下, 相同的 value -> 一组
+    // 只有键值对的数据集上才有 groupByKey()
+    // 行 -> 列
+    val group: RDD[(String, Iterable[Int])] = data.groupByKey()
+    group.foreach(println)
+
+    println("--------------------")
+
+    // 行列转换
+    // 列 -> 行 第一种方式
+    // map() 是一进一出, flatMap() 是一进多出
+    // flatMap(e => : (String, Iterable[Int]) => Unit)
+    val res01: RDD[(String, Int)] = group.flatMap(e => e._2.map(x => (e._1, x)).iterator)
+    res01.foreach(println)
+
+    println("--------------------")
+
+    // flatMapValues(f : Iterable[Int] => Unit) : 前面是扁平化, 后面是只会把 value 传到函数中
+    // 列 -> 行 第二种方式
+    group.flatMapValues(e => e.iterator).foreach(println)
+    println("--------------------")
+
+    // 取出每组中排序后的前 2 的数据
+    group.mapValues(e => e.toList.sorted.take(2)).foreach(println)
+    println("--------------------")
+
+    group.flatMapValues(e => e.toList.sorted.take(2).iterator).foreach(println)
+    println("--------------------")
+
+    // 在行列转换时, 数据的体积会发生变化吗 ?
+    // 数据的体积其实没有发生太大的变化, 因为 value 并没有约少, 更想表示的是
+    // 像 group 这类操作, 尤其是 groupByKey() 这种操作, 每人有三行 -> 每人一行, 但它的列数会变多, 数据其实没有相应减少的
+    // 后续调优时, 再进行相应进阶
+
+    println("---------- sum, count, max, min, avg ----------")
+
+    val sum: RDD[(String, Int)] = data.reduceByKey(_ + _)
+    val max: RDD[(String, Int)] = data.reduceByKey((ov, nv) => if (ov > nv) ov else nv)
+    val min: RDD[(String, Int)] = data.reduceByKey((ov, nv) => if (ov < nv) ov else nv)
+    // 曾经的数据集, value 已经没有意义了, 因为要做 count
+    // 要把它变成 ("Syndra", 1) 且 key 不变
+    // 而且每条记录进来还是只输出一条记录一对一的输出
+    val count: RDD[(String, Int)] = data.mapValues(e => 1).reduceByKey(_ + _)
+    // 计算平均值
+    // 用 sum / count, 这是语义上的, 怎么实现 ?
+    // sum 要和 count 的值两个值相遇到内存里然后才能进到一个函数中计算
+    // 相遇要写一个独立的函数实现
+    // 那么现在是 sum 是一个独立的数据集, count 是一个独立的数据集, 两个独立的数据集怎么相遇呢 ?
+    // 恰巧它们具有相同的 key, 这其实就是一个关联操作, 但是用 union() 还是 join() ?
+    // union() 是把一个数据集垂直拼进去, join() 是按照相同的 key 把不同的字段拼成一行
+    val tmp: RDD[(String, (Int, Int))] = sum.join(count)
+    val avg: RDD[(String, Int)] = tmp.mapValues(e => e._1 / e._2)
+
+    println("---------- sum ----------")
+    sum.foreach(println)
+
+    println("---------- max ----------")
+    max.foreach(println)
+
+    println("---------- min ----------")
+    min.foreach(println)
+
+    println("---------- count ----------")
+    count.foreach(println)
+
+    println("---------- avg ----------")
+    avg.foreach(println)
+
+    // 其实分布式计算时都有这么一个调优的过程
+    // 如果能在前面的 map 端把数据量压小的话, 后续 shuffle 时 IO 量也会变小
+    // 一次计算完成求 avg, 缺点是比较繁琐
+    val tmpx: RDD[(String, (Int, Int))] = data.combineByKey(
+      //      createCombiner: V => C, 第一条记录的 value 怎么放入 hashmap
+      (value: Int) => (value, 1),
+      //      mergeValue: (C, V) => C, 如果有第二条记录, 第二条以及以后的它们的 value 怎么放到 hashmap 中
+      (oldValue: (Int, Int), newValue: Int) => (oldValue._1 + newValue, oldValue._2 + 1),
+      //      mergeCombiners: (C, C) => C 合并溢写结果的函数
+      (v1: (Int, Int), v2: (Int, Int)) => (v1._1 + v2._1, v1._2 + v2._2)
+    )
+    tmpx.mapValues(e => e._1 / e._2).foreach(println)
+
+    while (true) {
+    }
+  }
+}
+```
+
+```scala
+/**
+ * Group the values for each key in the RDD into a single sequence. Hash-partitions the
+ * resulting RDD with the existing partitioner/parallelism level. The ordering of elements
+ * within each group is not guaranteed, and may even differ each time the resulting RDD is
+ * evaluated.
+ *
+ * @note This operation may be very expensive. If you are grouping in order to perform an
+ * aggregation (such as a sum or average) over each key, using `PairRDDFunctions.aggregateByKey`
+ * or `PairRDDFunctions.reduceByKey` will provide much better performance.
+ */
+def groupByKey(): RDD[(K, Iterable[V])] = self.withScope {
+  // 2.进入 groupKey()
+  groupByKey(defaultPartitioner(self))
+}
+
+/**
+ * Group the values for each key in the RDD into a single sequence. Allows controlling the
+ * partitioning of the resulting key-value pair RDD by passing a Partitioner.
+ * The ordering of elements within each group is not guaranteed, and may even differ
+ * each time the resulting RDD is evaluated.
+ *
+ * @note This operation may be very expensive. If you are grouping in order to perform an
+ * aggregation (such as a sum or average) over each key, using `PairRDDFunctions.aggregateByKey`
+ * or `PairRDDFunctions.reduceByKey` will provide much better performance.
+ *
+ * @note As currently implemented, groupByKey must be able to hold all the key-value pairs for any
+ * key in memory. If a key has too many values, it can result in an `OutOfMemoryError`.
+ */
+def groupByKey(partitioner: Partitioner): RDD[(K, Iterable[V])] = self.withScope {
+  // groupByKey shouldn't use map side combine because map side combine does not
+  // reduce the amount of data shuffled and requires all map side data be inserted
+  // into a hash table, leading to more objects in the old gen.
+  val createCombiner = (v: V) => CompactBuffer(v)
+  val mergeValue = (buf: CompactBuffer[V], v: V) => buf += v
+  val mergeCombiners = (c1: CompactBuffer[V], c2: CompactBuffer[V]) => c1 ++= c2
+  // 由此可见, groupKey() 的底层实现也是基于 combineByKeyWothClassTag[]()
+  val bufs = combineByKeyWithClassTag[CompactBuffer[V]](
+    createCombiner, mergeValue, mergeCombiners, partitioner, mapSideCombine = false)
+  bufs.asInstanceOf[RDD[(K, Iterable[V])]]
+}
+```
+
+Avg 的 Job 复杂度：
+
+![Avg的Job复杂度](D:\ideaProject\bigdata\bigdata-spark\image\Avg求Job的复杂度.png)
+
+这张图好像很乱，因为有两次各自的 shuffle，但是这个来自的数据集是同一个数据集，曾经数据集只有一批数据，但是这一批数据先要计算通过 shuffle 拉取到一台机器，然后相同的数据集又要参与一次计算，再通过网络 shuffle 再发给一台机器，有一台机器收了他们两个结果之后，内存相遇后才能拿出计算的方法求出平均值。
+
+###### 如果你有两个数据集：
+
+- ###### 第一步：解决相遇的问题；
+
+- ###### 第二步：才是解决计算逻辑的问题；
+
+**那么如何优化**？
+
+**首先要找到问题：数据被拉起独立计算不同的逻辑两次，，再把这句话减少，什么是优化？**
+
+**数据被拉起两次计算，完成两个独立的结果集，如果想优化，最本质的思想就是：数据能不能拉起一次内存计算就会产生两个结果集。**
+
+**接下来就是如何实现的问题。**
+
+------
+
+一次计算完成求 Avg：
+
+![OnceComputeFinishAvg](D:\ideaProject\bigdata\bigdata-spark\image\OnceComputeFinishAvg.png)
+
+------
+
+**2.Spark RDD Oriented Partitions Operations**
+
+```scala
+package com.syndra.bigdata.spark
+
+import org.apache.spark.rdd.RDD
+import org.apache.spark.{SparkConf, SparkContext}
+
+import scala.collection.mutable.ListBuffer
+
+/**
+ * Spark RDD Oriented Partitions Operations<br>
+ * {{{
+ *   // 迭代器的正确使用方式
+ *     val res03: RDD[String] = data.mapPartitionsWithIndex(
+ *       (pIndex, pIter) => {
+ *         new Iterator[String] {
+ *           println(s"----$pIndex--conn--MySQL----")
+ *
+ *           override def hasNext = if (pIter.hasNext == false) {
+ *             println(s"----$pIndex--close--MySQL----")
+ *             false
+ *           } else true
+ *
+ *           override def next(): String = {
+ *             val value = pIter.next()
+ *             println(s"----$pIndex--SELECT $value----")
+ *             value + "SELECTED"
+ *           }
+ *         }
+ *       }
+ *     )
+ *     res03.foreach(println)
+ * }}}
+ */
+object Lesson04_RDD_Partitions {
+  def main(args: Array[String]): Unit = {
+    val conf = new SparkConf().setMaster("local").setAppName("partitions")
+    val sc = new SparkContext(conf)
+    sc.setLogLevel("ERROR")
+
+    val data: RDD[Int] = sc.parallelize(1 to 10, 2)
+
+    // 外关联 SQL 查询
+    val res01: RDD[String] = data.map(
+      (value: Int) => {
+        println("----conn--MySQL----")
+        println(s"----SELECT $value----")
+        println("close--MySQL----")
+        value + "SELECTED"
+      }
+    )
+    res01.foreach(println)
+
+    println("--------------------")
+
+    val res02: RDD[String] = data.mapPartitionsWithIndex(
+      (pIndex, pIter) => {
+        val lb = new ListBuffer[String] // 致命的!!! 根据之前的源码发现, Spark 是一个 Pipline, 迭代器嵌套的模式
+        // 数据不会在内存积压
+        println(s"----$pIndex--conn--MySQL----")
+        while (pIter.hasNext) {
+          val value: Int = pIter.next()
+          println(s"----$pIndex--SELECT $value----")
+          lb.+=(value + "SELECTED")
+        }
+        println("close--MySQL----")
+        lb.iterator
+      }
+    )
+    res02.foreach(println)
+
+    println("---------- Iterator Optimize -----------")
+
+    // 如果不是一对一的处理, 如果 new 了一个迭代器, 被调用了后
+    // 后续调的时候不是调一次从父级取一次, 也就是说
+    // 调了 hasNext() 后, 可能拿了一个字符串, 然后后续再调的时候, 可能要把一个一个单词返回
+    // 然后此时又伴随数据库的初始化, 连接的初始化, 就必须自行重写迭代器
+    // 那怎么能满足一对多的输出 ?
+    // 迭代器的正确使用方式
+    val res03: RDD[String] = data.mapPartitionsWithIndex(
+      (pIndex, pIter) => {
+        //        pIter.flatMap()
+        //        pIter.map()
+
+        new Iterator[String] {
+          println(s"----$pIndex--conn--MySQL----")
+
+          override def hasNext = if (pIter.hasNext == false) {
+            println(s"----$pIndex--close--MySQL----")
+            false
+          } else true
+
+          override def next(): String = {
+            val value = pIter.next()
+            println(s"----$pIndex--SELECT $value----")
+            value + "SELECTED"
+          }
+        }
+      }
+    )
+    res03.foreach(println)
+  }
+}
+```
+
+分区操作中，迭代器的进阶使用方式。
+
+------
+
+**3.Spark RDD High Level**
+
+```scala
+package com.syndra.bigdata.spark
+
+import org.apache.spark.rdd.RDD
+import org.apache.spark.{SparkConf, SparkContext}
+
+/**
+ * Spark RDD High-Level Operations
+ */
+object Lesson05_RDD_HighLevel {
+  def main(args: Array[String]): Unit = {
+    val conf = new SparkConf().setMaster("local").setAppName("test")
+    val sc = new SparkContext(conf)
+    sc.setLogLevel("ERROR")
+
+    val data: RDD[Int] = sc.parallelize(1 to 10, 5)
+
+    // 数据抽样
+    // 种子 : 一般抽样都会涉及到种子的概念, 如果给出种子, 相同的种子多少次抽到的都是相同的那批数据
+    // sample(是否允许重新抽, 抽取占比, 种子)
+    // 一种场景
+    // A, B 在同一个项目组, 数据其中一批在集群中, 然后 A, B 共同开发
+    // 二人约定种子都是 22, A 在本地拿 22 抽出一批数据, B 在另外一台机器中也用 22 抽出一批数据
+    // 然后 A, B 抽到的数据相同, 如果有时项目中刻意的有相同代码
+    // 要基于相同的样本去开发业务逻辑时, 那就用 22 约定一个种子就可以了
+    //    data.sample(false, 0.1, 222).foreach(println)
+    //    println("--------------------")
+    //    data.sample(false, 0.1, 222).foreach(println)
+    //    println("--------------------")
+    //    data.sample(false, 0.1, 221).foreach(println)
+    //    println("--------------------")
+
+    // 大数据中, 并行度是计算提速的一个方式
+    // 但是并行度绝对不是说越高越好, 要保证一个并行度粒度中的数据量
+    // 即符合 IO 又符合内存的消耗, 因为创建进程的时间也有损耗
+    // 如果只有 3台 机器, 每个两个核心的话, 理论上最多的并行度是 6 个 JVM
+    // 一个 JVM 消耗一个 CPU, 6 个就够了, 但是有可能几十个 RDD 关联后, 它的分区变的好多, 并行度就上去了
+    // 那么此时其实同意时间只能有 6 个进程的话, 如果有 60 个分区, 那就要分十次跑完
+    // 那还不如就把它变成 6 个分区, 每个分区数量大一点, 所以调整分区是一定会在未来的工作
+    // 在业务层面之外调优不可避免, 而同时是面试环节必须要聊的一件事, 含金量很高
+    // 这其中细活很多!!!
+    println(s"data:${data.getNumPartitions}")
+
+    println("--------------------")
+
+    // 为每条记录打印标识
+    val data1: RDD[(Int, Int)] = data.mapPartitionsWithIndex(
+      (pI, pT) => {
+        pT.map(e => (pI, e))
+      }
+    )
+    data1.foreach(println)
+
+    println("--------------------")
+
+    // 1.调整分区量
+    // 1.1.进入 repartition()
+    val repartition = data1.repartition(4)
+
+    // 转换后的数据分区
+    val res: RDD[(Int, (Int, Int))] = repartition.mapPartitionsWithIndex(
+      (pI, pT) => {
+        // 曾经是哪个分区的哪条数据
+        pT.map(e => (pI, e))
+      }
+    )
+
+    println(s"data:${res.getNumPartitions}")
+    res.foreach(println)
+
+    while (true) {
+    }
+  }
+}
+```
+
+在调整分区的过程中会不会产生 shuffle？
+
+![调整分区是否会产生shuffle](D:\ideaProject\bigdata\bigdata-spark\image\调整分区数量的过程会不会产生shuffle.png)
+
+repartition 的过程一定会产生一个 shuffle，因为如果没有这个过程，是不能够把一个分区的数据从一台机器移动到另一台机器的，所以 repartition 是依靠 shuffle 的方式，让记录再重新计算它的分区号，然后再通过 shuffle-write，shuffle-read 拉取数据几个计算机数据洗牌的过程。
+
+```scala
+/**
+ * Return a new RDD that has exactly numPartitions partitions.
+ *
+ * Can increase or decrease the level of parallelism in this RDD. Internally, this uses
+ * a shuffle to redistribute data.
+ *
+ * If you are decreasing the number of partitions in this RDD, consider using `coalesce`,
+ * which can avoid performing a shuffle.
+ *
+ * TODO Fix the Shuffle+Repartition data loss issue described in SPARK-23207.
+ */
+def repartition(numPartitions: Int)(implicit ord: Ordering[T] = null): RDD[T] = withScope {
+  // 调用 coalesce() 算子, 即传递了要缩减/放大的分区数量, 同时固定的传递了第二个参数为 true
+  // 就是要触发 shuffle, 其实干活的是 coalesce(), 它可以产生 shuffle 也可以不产生 shuffle
+  coalesce(numPartitions, shuffle = true)
+}
+```
+
+
+
+
+$$
+P(x_1 = 0 \mid y_1 = 0) = \frac{\text{Count}(x_1 = 0, y_1 = 0) + \frac{n}{2}}{\text{Count}(y_1) + n}
+$$
