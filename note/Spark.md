@@ -1162,6 +1162,8 @@ override def getDependencies: Seq[Dependency[_]] = {
   }
 ```
 
+------
+
 ## 章节6 : Spark-CORE，wordcount 案例源码分析，图解
 
 图解详见 Idea 工程中 image 目录。
@@ -2096,9 +2098,235 @@ def repartition(numPartitions: Int)(implicit ord: Ordering[T] = null): RDD[T] = 
 }
 ```
 
+------
 
+## 章节9：Spark-CORE，二次排序，分组取TopN，算子综合应用
 
+```scala
+package com.syndra.bigdata.spark
 
-$$
-P(x_1 = 0 \mid y_1 = 0) = \frac{\text{Count}(x_1 = 0, y_1 = 0) + \frac{n}{2}}{\text{Count}(y_1) + n}
-$$
+import org.apache.spark.rdd.RDD
+import org.apache.spark.{SparkConf, SparkContext}
+
+/**
+ * Spark_RDD_算子综合应用 :<br>
+ * <ul>
+ * <li>分组取 TopN</li>
+ * </ul>
+ */
+object Lesson06_RDD_Over {
+  def main(args: Array[String]): Unit = {
+    val conf = new SparkConf().setMaster("local").setAppName("test")
+    val sc = new SparkContext(conf)
+    sc.setLogLevel("ERROR")
+
+    // TopN, 分组取 TopN, 其中会牵扯到二次排序的概念
+    // 2019-6-1	39
+    // 需求 : 同月份中, 温度最高的两天
+    val file: RDD[String] = sc.textFile("data/tqdata")
+
+    // 隐式转换 Ordering, 用于排序
+    implicit var ordered = new Ordering[(Int, Int)] {
+      override def compare(x: (Int, Int), y: (Int, Int)): Int = y._2.compare(x._2)
+    }
+
+    println("---------- 分组取 TopN-V1 ----------")
+    val data: RDD[(Int, Int, Int, Int)] = file.map(line => line.split("\t")).map(arr => {
+      val arrs: Array[String] = arr(0).split("-")
+      // (year, month, day, wd)
+      (arrs(0).toInt, arrs(1).toInt, arrs(2).toInt, arr(1).toInt)
+    })
+
+    //    // 分组取 TopN V1
+    //    val grouped: RDD[((Int, Int), Iterable[(Int, Int)])] = data.map(t4 => ((t4._1, t4._2), (t4._3, t4._4))).groupByKey()
+    //    val res: RDD[((Int, Int), List[(Int, Int)])] = grouped.mapValues(arr => {
+    //      // 关注点 : 相同年月中, 日期和温度有什么特征
+    //      // 19年三条数据, 如果让你处理的话, 如果变成一个数组, 你应该关注哪些问题 ?
+    //      // 1.同一月份中相同天中过滤掉那些低温只留一个最高温, 作为这一天的代表
+    //      // 2.如果数据去重后, 把剩下的数据做个排序, 写成倒序就可以了
+    //      // 有了 map 后, 让你进入这个数组相同的 19年6月 这个数组中所有的每天的温度
+    //      // 这一堆数据要遍历放进 map
+    //      val map = new mutable.HashMap[Int, Int]()
+    //      arr.foreach(x => {
+    //        if (map.get(x._1).getOrElse(0) < x._2) map.put(x._1, x._2)
+    //      })
+    //      map.toList.sorted(new Ordering[(Int, Int)] {
+    //        // 用温度排序, 且是 y : x, 这样返回就是倒序
+    //        override def compare(x: (Int, Int), y: (Int, Int)): Int = y._2.compare(x._2)
+    //      })
+    //    })
+    //    res.foreach(println)
+    //    println("--------------------")
+
+    // 思考 : 以上代码中, 有没有什么潜在风险或问题 ?
+    // 1.groupByKey(), 比如 value 整个 6月份的数据达到了 10T, 那么它就溢出了
+    // 因为最终会发现它的 value 是要拼成一个迭代器的数据集, 真正计算时, 是要占用内存的
+    // groupByKey() 在工作中不建议使用, 除非 key 的 value 数量很少, 那么可以用
+    // 2.map 中要开辟对象, 在这承载所有数据, 最终再把它输出, 因此内存利用率上有可能出现 OOM
+
+    println("---------- 分组取 TopN-V2 ----------")
+
+    // 分组取 TopN V2
+    // 有个排序的过程
+    // 此时其实还可以拿着这个数据集怎么去做, 也可以实现 TopN 的结果
+    // 这里面还要关注数据集的特征, 06-01 重复的数据先要去重, 然后相同的 key 划分到一块, 然后再排序
+    // 此前是把去重和排序放到了一个算子中去做, 有可能会产生溢出
+    // 那么是否可以用什么换什么 ? 拿时间拿速度来换内存不溢出的方案
+    // 取相同的年月日中的 max
+    val reduced: RDD[((Int, Int, Int), Int)] = data.map(t4 => ((t4._1, t4._2, t4._3), t4._4)).reduceByKey((x: Int, y: Int) => if (y > x) y else x)
+    // t2._1._1 年, t2._1._2 月, t2._1._3 日, t2._2 值
+    val maped: RDD[((Int, Int), (Int, Int))] = reduced.map(t2 => ((t2._1._1, t2._1._2), (t2._1._3, t2._2)))
+    val grouped: RDD[((Int, Int), Iterable[(Int, Int)])] = maped.groupByKey()
+    // 取 Top2
+    grouped.mapValues(arr => arr.toList.sorted.take(2)).foreach(println)
+
+    while (true) {
+    }
+  }
+}
+```
+
+### **第一个 Job** 的执行成本，如下图所示：
+
+![分组取TopN-V1](D:\ideaProject\bigdata\bigdata-spark\image\分组取TopN-V1.png)
+
+它有两个 **Stage** 也就是两步，Stage 之间的曲线代表发生了一次 **shuffle**，底层的 **groupNyKey()** 要走 **shuffle** 拉取它相同 **key** 为一组的数据拉过来才能发生后续的计算。
+
+###### 问题：用了 **groupByKey()** 容易 **OOM**，且自己的算子实现了函数：**去重，排序**。
+
+### **第二个 Job**，如下图所示：
+
+![分组取TopN-V2](D:\ideaProject\bigdata\bigdata-spark\image\分组取TopN-V2.png)
+
+拿了一步 **shuffle**，先解决了去重，然后再最终取得这个分组，但是这其中依然用到了 **groupByKey()** 有可能会 **OOM**。
+
+同样的需求，不同的写法，成本和风险是不一样的。
+
+###### 问题：用了 **groupByKey()**，容易 **OOM**，取巧 **Spark RDD reduceByKey()** 的取 **max** 间接达到去重，让自己的算子变动简单点。
+
+### **第三个 Job**，如下图：
+
+![分组取TopN-V3](D:\ideaProject\bigdata\bigdata-spark\image\分组取TopN-V3.png)
+
+比第二个 **Job** 又复杂了些，因为使用了很多的算子，基于 **shuffle** 也是基于划分 **key** 的分区的过程，关键是 **sortBy()** 是按年月温度排序，**reduceByKey()** 是按年月日，主要是按年月排序。
+
+第一次 **shuffle** 拉起数据时，计算每一个数据，它应该是哪个分区，应该是谁和谁排在一起，第一步排序时，按照**年月温度**这三个维度，在 **reduceByKey()** 去重时，是按照年月日，那么此时有个问题：
+
+**年月温度**和**年月日**它们之间有可能会产生错乱，找年月温度时，它们按照大小排在一起就可以了，但是 **reduceNyKey()** 这种行为的话，它一定是按照哈希取模的方式，而哈希取模一定是按照年月日而没有按照年月温度，年月温度的它的哈希一定是找年月温度都相同的一定在一起，然后后续做 **groupByKey() **分组时，是按照年月分组，而且没有按照年月日分组或者按照年月温度去分组，所以这几步 **shuffle**太多，其实数据特征曾经排序已经洗乱了，因为后面的 **shuffle** 让数据重新划分分组，已经可能扰乱了数据的顺序，虽然先前是一个全排序。
+
+**sortBy()** 一定是一个处理全排序的，但这是一步，最好把它理解成一步之内的事，如果后续再有 **shuffle** 的话，这全排序的事就不要再想了，保守的时候，如果后续想要全排序时再重新排序，这是一个法则。
+
+###### 问题：用了 **groupByKey()**，容易 **OOM**，取巧 **Spark 的 RDD 的 reduceByKey()** 去重，用了 **sortByKey()** 排序， **注意多级 shuffle** 关注，后续 **shuffle** 的 **key** 一定得是前置 **rdd key** 的子集。
+
+### **第四个 Job**，如下图：
+
+![分组取TopN-V4](D:\ideaProject\bigdata\bigdata-spark\image\分组取TopN-V4.png)
+
+其实是这样的，**全排序**的结果后，按照的是**年月温度**，但是分组时按的是**年月**，也就是说，后续 **shuffle** 如果没有从左向右使用先前的 **key** 的子集，先前**年月温度是一个三个维度的全集**，但**分组是年月**，**相同年月还排在一起**，它们的**哈希值还是一样的**，**取模值也是一样的**，从有序中每个转过来后，它们依然还是**有序的**，但如果下一步使用的不是**当前的子集**，先前的**年月温度**，后续 **shuffle** 使用的**年月日**，此时使得**年月日都去重了**，**年月日和先前就不是同一类了**。
+
+**因为先前年月的一定排在一起了，但是年月日加了一个日期，在哈希取模的顺序就乱了，因为日期会让年月的顺序发生混乱，这才是根本。**
+
+其实这个知识点在学 **MapReduce** 时讲过二次排序的坑，在 **MapReduce** 中有两个阶段，**Map** 阶段中一定会排序，相当于它们可以分到一起，**Reduce** 阶段可以写一个 **groupComparator()** 分组比较器，但是**分组比较器**在比较时只能比较 **Map** 排序 **key** 的**子集**，如果先前按照**年月温度**排序，后续就不能按照**年月天气**分组，只能按照**年月**一个**小的集**去分组，**这才叫真正的二次排序**。
+
+但是以上的写法，其实它们或多或少都存在了很多问题，要么 **OOM**，要么 **shuffle** 的问题，有没有一个方法可以既让 **shuffle** 数量表少，且基本没有 **OOM** 的风险，速度或多或少相对变快。
+
+###### 问题：用了 **groupByKey()**，容易 **OOM**，取巧 **Spark 的 RDD 的  sortByKey()** 排序，**没有破坏多级 shuffle 的 key 的子集关系**。
+
+### **第五个 Job**，如下图：
+
+![分组取TopN-V5](D:\ideaProject\bigdata\bigdata-spark\image\分组取TopN-V5.png)
+
+首先 **shuffle** 只会有一次，**combineByKey()** 基本不会产生 **OOM**，且**内存占用也是最少的**，所以最后这个是最优方式。
+
+#### 问题：
+
+##### 分布式计算的核心思想：
+
+###### 调优天下无敌：**combineByKey()** 。
+
+###### 分布式是并行的，离线批量计算有个特征就是后续步骤 **(Stage) **依赖其一步骤 **(Stage)**，如果先前的步骤 **(Stage)** 能够加上正确的**combineByKey()**，我们自定义的 **combineByKey()** 的函数尽量压缩内存中的数据。
+
+### value 放大 10 倍，如下图：
+
+![value放大10倍](D:\ideaProject\bigdata\bigdata-spark\image\value放大10倍.png)
+
+#### 另一种写法(也是推荐写法)，如下图：
+
+![mapValues()](D:\ideaProject\bigdata\bigdata-spark\image\推荐写法mapValues.png)
+
+##### **那么问题来了，谁的成本相对低一些？性能好一些？**
+
+为什么？真的有没有懂 **shuffle** 的概念？它俩差在哪了？
+
+###### 就差在一个算子上，要么是 **map()**，要么是 **mapValues()**，先来看 **map()** 点开：
+
+```scala
+/**
+ * Return a new RDD by applying a function to all elements of this RDD.
+ */
+// 然后参数中无法就是前置的 rdd 引用, 传一个匿名函数进去
+def map[U: ClassTag](f: T => U): RDD[U] = withScope {
+  val cleanF = sc.clean(f)
+  // 会 new 一个 MapPartitionsRDD
+  // map 拿着我们的函数传参, 先把迭代器中的 KV 扔给 cleanF
+  // cleanF 接收的是迭代器的 KV
+  new MapPartitionsRDD[U, T](this, (context, pid, iter) => iter.map(cleanF))
+}
+
+// map 只传递两个参数
+private[spark] class MapPartitionsRDD[U: ClassTag, T: ClassTag](
+    var prev: RDD[T],
+    f: (TaskContext, Int, Iterator[T]) => Iterator[U],  // (TaskContext, partition index, iterator)
+    // map 不传递这个分区参数, 所以默认 false
+    preservesPartitioning: Boolean = false,
+    isOrderSensitive: Boolean = false)
+```
+
+再来看 **mapValues()** 点开：
+
+```scala
+/**
+ * Pass each value in the key-value pair RDD through a map function without changing the keys;
+ * this also retains the original RDD's partitioning.
+ */
+def mapValues[U](f: V => U): RDD[(K, U)] = self.withScope {
+  // 传递的函数 f, 先清理成 cleanF
+  val cleanF = self.context.clean(f)
+  new MapPartitionsRDD[(K, U), (K, V)](self,
+    // 拿出父级迭代器
+    // 如果是 KV, 它拼了一个返回 KV, 就是 rdd 的 KV 已经处理好了
+    // 拿我们的函数只处理 value, 这就是为什么调用时只会收到一个函数
+    (context, pid, iter) => iter.map { case (k, v) => (k, cleanF(v)) },
+    preservesPartitioning = true)
+}
+
+// mapValues 传递三个参数
+private[spark] class MapPartitionsRDD[U: ClassTag, T: ClassTag](
+    var prev: RDD[T],
+    f: (TaskContext, Int, Iterator[T]) => Iterator[U],  // (TaskContext, partition index, iterator)
+    // mapValues 传递这个参数且为 true
+    preservesPartitioning: Boolean = false,
+    isOrderSensitive: Boolean = false)
+```
+
+这个属性：
+
+```scala
+preservesPartitioning: Boolean = false
+```
+
+决定了 **map()** 和 **mapVaules()** 的差异。
+
+###### 那么这个属性决定了什么道理？
+
+- 当 **reducebyKey()** 时，是按照单词，然后调了 **map**，**map** 结束后，**key** 还是单词，但是 **key** 变了吗？并没有，那之后再调 **groupByKey()**，**key 没有发生变化，分区器没有发生变化，分区数没有发生变化，且是 KV，那么建议：mapValues()，flatMapValues()。**，就是把 **shuffle 依赖调整成 窄依赖** 做一次优化。
+- **map()** 没有分区器，**mapValues()** 有分区器，取决于属性是否为真，确定后续是否有分区器。
+
+```scala
+// 如果有分区器且前后分区数量相等, 那么可以不发生 shuffle
+override val partitioner = if (preservesPartitioning) firstParent[T].partitioner else None
+```
+
+------
+
+## 章节10：Spark-CORE，集群框架图解，角色功能介绍，官网学习，搭建
