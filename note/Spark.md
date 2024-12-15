@@ -1,5 +1,7 @@
 # Spark 框架
 
+------
+
 ## 章节5 : Spark-CORE，复习 Hadoop 生态，梳理术语， HadoopRDD 源码解析
 
 已经执行的任务 RDD，如果别的任务有服用则直接使用
@@ -103,7 +105,6 @@ localhost:40404 是 Spark UI。
 
 - a list of preferred locations to compute each split
 
-  
 
 ------
 
@@ -1036,9 +1037,9 @@ abstract class RDD[T: ClassTag](
 
 一堆 (单词，1) 是怎么在分布式情况下经过 Shuffle 变成 (单词，n) ?
 
-用了一个 reduceByKey()，传了一个函数进去，老值 + 新值 一个匿名函数，但是这个 reduceByKey() 中调的时候，会先分配一个分区器，因为它一定会触发 Shuffle，Shuffle 一定会使用分区器 partitioner，让相同的 key 得到一个相同的分区号，而且默认是 HashPartition，最终调的是 combineByKeyWithClassTag()，其实 Spark 中替我们做了些优化，自带的 combine 回去数据减少网络 IO，如果想完成 combine，数据被汇聚聚合压缩也需要三步：1.记录怎么进，2.后续 value 怎么求和，3.多次溢写怎么整合汇聚。
+用了一个 **reduceByKey()**，传了一个函数进去，**老值** + **新值** 一个匿名函数，但是这个 **reduceByKey()** 中调的时候，会先分配一个分区器，因为它一定会触发 **Shuffle**，**Shuffle** 一定会使用分区器 **partitioner**，让相同的 **key** 得到一个相同的分区号，而且默认是 **HashPartition**，最终调的是 **combineByKeyWithClassTag()**，其实 **Spark** 中替我们做了些优化，自带的 **combine** 回去数据减少网络 **IO**，如果想完成 **combine**，数据被汇聚聚合压缩也需要三步：1.记录怎么进，2.后续 **value** 怎么求和，3.多次溢写怎么整合汇聚。
 
-所以此时 combineByKeyWithClassTag 有三个参数
+所以此时 **combineByKeyWithClassTag** 有三个参数
 
 ```scala
 package org.apache.spark.rdd
@@ -1166,7 +1167,7 @@ override def getDependencies: Seq[Dependency[_]] = {
 
 ## 章节6 : Spark-CORE，wordcount 案例源码分析，图解
 
-图解详见 Idea 工程中 image 目录。
+**图解详见 Idea 工程中 image 目录。**
 
 ------
 
@@ -2329,4 +2330,3 @@ override val partitioner = if (preservesPartitioning) firstParent[T].partitioner
 
 ------
 
-## 章节10：Spark-CORE，集群框架图解，角色功能介绍，官网学习，搭建
