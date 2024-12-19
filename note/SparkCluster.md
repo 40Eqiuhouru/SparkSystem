@@ -359,9 +359,7 @@ spark-shell --master Cluster 额外参数运行后，SparkWebUI 的运行结果�
 
 - **第二是哪些位置会用到这个地方？**
 
-
-
-
+  Driver
 
 ###### 1.1 记录（hadoop01）
 
@@ -846,7 +844,7 @@ $jar \
 1000
 ```
 
-```
+```shell
 . submit.sh
 ```
 
@@ -864,6 +862,421 @@ $jar \
 ```
 
 会根据实际的作业的数据特征是大数据，小文件，还是 IO 比较多，还是并行度比较多，根据各种情况调整各自的值。
+
+------
+
+## 章节12：Spark-CORE，基于 yarn 的集群搭建、配置，资源调度参数，优化 jars
+
+在企业中，更多的资源层是 yarn，公司的多台机器中，他不应该其中只跑一种计算框架，应该是各种类型计算特征的框架，都部署在其中，想用哪种类型的时候，随即调用执行。
+
+### 1.YARN
+
+**Spark On Yarn**
+
+**Kylin -> 麒麟：这套系统，它只是你去页面走一些流程，定义一些数据的维度，数据集之类的，然后最终提交，它会 hold 住下边整个大数据集群中部署的那些东西。比如：Hive，HBase，Spark，你是看不到的，而你部署的时候可能连 Spark 都不用部署，因为 Kylin 中可能集成了 Spark 安装包，而且它不需要每个节点都去部署。**
+
+### 2.部署
+
+1. 停止 Spark 的 Master，Worker，HistoryServer：
+
+   ```shell
+   # 切换到 hadoop01 sbin 目录下
+   ./stop-all.sh
+   # 切换到 hadoop02 sbin 目录下
+   ./stop-history-server.sh
+   ./stop-master.sh
+   ```
+
+2. Spark On Yarn：不需要 Master，Worker 的配置，Yarn 不需要这两个角色启动：
+
+   ```sh
+   # 去 hadoop01 Spark conf 目录下改 spark-env.sh
+   cd $SPARK_HOME
+   cd conf
+   vi spark-env.sh
+   # 注释掉 MASTER 配置
+   # export SPARK_MASTER_HOST=hadoop01
+   # export SPARK_MASTER_PORT=7077
+   # export SPARK_MASTER_WEBUI_PORT=8080
+   #
+   # 注释掉 WORKER 配置
+   # export SPARK_WORKER_CORES=2
+   # export SPARK_WORKER_MEMORY=4g
+   ```
+
+3. 此时主从已经没有了，配置也没了，slaves 文件也可以不用了：
+
+   ```shell
+   # 切换到 hadoop01 Spark conf 目录下
+   # 将 slaves 重命名为 slaves.bak
+   mv slaves slaves.bak
+   ```
+
+4. 只需要启动 yarn 的角色。
+
+### 3.配置
+
+1. 修改 hadoop01 的 spark-env.sh 配置文件：
+
+   ```shell
+   # 切换到 hadoop01 Spark conf 目录下 
+   # 只剩下了一个配置
+   # 为什么只留这个配置, 因为要关注的是 Spark On Yarn 是一个维度
+   # 这个配置目录中会有 Yarn 的配置文件, 会通过读取这个配置文件
+   # 会知道 ResourceManager, 且它不只是 Spark On Yarn
+   # 还会 On HDFS, 通过其中也可以拿到 NameNode, DataNode 相关的配置信息
+   export HADOOP_CONF_DIR=/opt/bigdata/hadoop-2.6.5/etc/hadoop
+   ```
+
+2. 修改 spark-defaults.conf：
+
+   ```shell
+   # 切换到 hadoop01 Spark conf 目录下
+   # 注释到 Zookeeper 做 HA 的配置
+   # 它是做的 Master 的 HA, 这三个配置已经没有意义了
+   # 一定要清楚哪些东西是在哪个模式下使用的
+   # 以下配置
+   # spark.deploy.recoveryMode       ZOOKEEPER
+   # spark.deploy.zookeeper.url      hadoop02:2181,hadoop03:2181,hadoop04:2181
+   # spark.deploy.zookeeper.dir      /syndraspark
+   #
+   # 以下配置是计算层程序会把计算的日志写到 HDFS 并会启动一个不是资源层的角色
+   # 启动的是计算层的一个历史记录的服务器, 它可以拿到曾经的日志并给你展示历史状态
+   spark.eventLog.enabled  true
+   spark.eventLog.dir      hdfs://mycluster/spark_log
+   spark.history.fs.logDirectory   hdfs://mycluster/spark_log
+   ```
+
+3. 分发修改后的配置文件：
+
+   ```shell
+   scp spark-env.sh spark-defaults.conf hadoop02:`pwd`
+   scp spark-env.sh spark-defaults.conf hadoop03:`pwd`
+   scp spark-env.sh spark-defaults.conf hadoop04:`pwd`
+   ```
+
+#### 3.1 Hadoop
+
+首先在 Yarn 中添加几个配置项，修改的是 nodemanager，然后将资源中的 memory 的每一个 nodemanager 改成 4096（也就是 4G），其实框架访问资源层看到的内存和核心数量它并不是物理的，是我们在资源层可以虚构配置出来的，还有一个配置项是虚拟内存检查，这些知识和开发没有任何关系，都是运维去做（没有运维除外，需要自己做）。
+
+##### 3.1.1 切换到 Hadoop etc/hadoop 的目录
+
+1. 修改 yarn-site.xml：
+
+   ```shell
+   # 切换到 hadoop01 /etc/hadoop 目录
+   cd $HADOOP_HOME
+   vi yarn-site.xml
+   ```
+
+   ```xml
+   <!-- 添加以下配置 -->
+   <property>
+       <name>yarn.nodemanager.resource.memory-mb</name>
+       <value>4096</value>
+   </property>
+   <!-- 核心的数量, 和 standaloneHA 的资源层类似 -->
+   <property>
+       <name>yarn.nodemanager.resource-cpu-vcores</name>
+       <value>4</value>
+   </property>
+   <!-- 虚拟内存检查, 需要关闭 -->
+   <property>
+       <name>yarn.nodemanager.vmem-check-enabled</name>
+       <value>false</value>
+   </property>
+   ```
+
+2. 修改 mapred-site.xml：
+
+   ```shell
+   # 它也是计算层, 每个计算层都有自己的历史服务器
+   # 修改 mapred-site.xml
+   vi mapred-site.xml
+   ```
+
+   ```xml
+   <!-- 添加以下配置 -->
+   <!-- 开启历史服务器功能 -->
+   <property>
+       <name>mapred.job.history.server.embedded</name>
+       <value>true</value>
+   </property>
+   <!-- 对应的地址 -->
+   <property>
+       <name>mapreduce.jobhistory.address</name>
+       <value>hadoop03:10020</value>
+   </property>
+   <!-- 对应的 WebUI 地址 -->
+   <property>
+       <name>mapreduce.jobhository.webapp.address</name>
+       <value>hadoop03:50060</value>
+   </property>
+   <property>
+       <name>mapreduce.jobhistory.intermediate-done-dir</name>
+       <value>/work/mr_history_tmp</value>
+   </property>
+   <property>
+       <name>mapreduce.jobhistory.done-dir</name>
+       <value>/work/mr-history_done</value>
+   </property>
+   ```
+
+3. 分发修改后的配置文件：
+
+   ```shell
+   scp yarn-site.xml mapred-site.xml hadoop02:`pwd`
+   scp yarn-site.xml mapred-site.xml hadoop03:`pwd`
+   scp yarn-site.xml mapred-site.xml hadoop04:`pwd`
+   ```
+
+### 4.启动
+
+#### 4.1 切换到 hadoop01
+
+1. 启动 yarn，如下图：
+
+   ```shell
+   # 切换到 hadoop01 /etc/hadoop
+   cd $HADOOP_HOME
+   cd etc
+   cd hadoop
+   # 这个脚本会代替我们把 NodeManager 运行起来
+   # 但是 ResourceManager 运行不起来, 定义在了 hadoop03, hadoop04
+   start-yarn.sh
+   ```
+
+   ![hadoop01 启动 yarn 脚本 start-yarn.sh](D:\ideaProject\bigdata\bigdata-spark\image\hadoop01_start-yarn-sh.png)
+
+2. 手动启动 hadoop03，hadoop04 的 ResourceManager，如下图：
+
+   ```shell
+   # 切换到 hadoop03, hadoop04
+   # 分别手动启动 resourcemanager
+   yarn-daemon.sh start resourcemanager
+   ```
+
+   ![hadoop03 手动启动 ResourceManager](D:\ideaProject\bigdata\bigdata-spark\image\hadoop03_start-resourcemanager.png)
+
+   ![hadoop04 手动启动 ResourceManager](D:\ideaProject\bigdata\bigdata-spark\image\hadoop04_start-resourcemanager.png)
+
+3. 访问 hadoop03 HadoopWebUI，如下图：
+
+   ![hadoop03 的 HadoopWebUI](D:\ideaProject\bigdata\bigdata-spark\image\访问HadoopWebUI.png)
+
+4. 此时跑一个 wordcount 的程序，它的历史记录会被记录下来吗？如下图：
+
+   ```shell
+   # 切换到 hadoop01 的 share/hadoop/mapreduce
+   cd $HADOOP_HOME
+   cd share/hadoop/mapreduce
+   # 运行 hadoop examples
+   hadoop jar hadoop-mapreduce-examples-2.6.5.jar wordcount /sparktest/data.txt /fuck
+   ```
+
+   ![hadoop01 wordcount运行结果](D:\ideaProject\bigdata\bigdata-spark\image\hadoop01_examples-wordcount.png)
+
+   ![HadoopWebUI 运行 wordcount 结果](D:\ideaProject\bigdata\bigdata-spark\image\HadoopWebUI_wordcount运行成功.png)
+
+5. 进入 History，会发现看不到，如下图：
+
+   ![无法访问](D:\ideaProject\bigdata\bigdata-spark\image\jobhistory.png)
+
+6. hadoop03 启动 mapreduce 的 jobhistory service，如下图：
+
+   ```shell
+   # hadoop03
+   mr-jobhistory-daemon.sh start historyserver
+   ```
+
+   ![hadoop03 启动 mr-jobhistory](D:\ideaProject\bigdata\bigdata-spark\image\hadoop03_mr-jobhistory-historyserver.png)
+
+   ![HDFS 中会有 mr-history_done, mr_history_tmp 两个目录](D:\ideaProject\bigdata\bigdata-spark\image\mr_history_done_tmp两个目录.png)
+
+   ![再次访问 History](D:\ideaProject\bigdata\bigdata-spark\image\再次访问History.png)
+
+7. Counters 会罗列出所有维度，曾经在执行这个作业结果时，做很多统计，在 hadoop01 shell 中也能追溯回来，所有的数据都在这统计，做调优或对比以及 Cluster状态，都可以在此处看，如下图：
+
+   ![HadoopWebUI Counters](D:\ideaProject\bigdata\bigdata-spark\image\Counters.png)
+
+   ![hadoop01_shell-Counters](D:\ideaProject\bigdata\bigdata-spark\image\hadoop01_shell-Counters.png)
+
+#### 4.2 但这是 MapReduce，跟 Spark 完全没关系，Spark 有自己的历史记录服务器
+
+#### 4.3 以上 YARN Cluster 搭建成功
+
+#### 4.4 启动 Spark
+
+1. **切换到 hadoop01 Spark 目录下**
+
+   ```shell
+   # 切换到 hadoop01 Spark 目录下
+   cd $SPARK_HOME
+   # 此时应该启动什么呢 ? 在只有以下进程的情况下
+   [root@hadoop01 spark-2.3.4-bin-hadoop2.6]# jps
+   3009 DFSZKFailoverController
+   2722 JournalNode
+   5076 Jps
+   2446 NameNode
+   # 还是去 Spark sbin 或 bin 目录下去执行什么东西 ?
+   # 一定要记住, 有了 Yarn 后不需要再去启动 Spark 它的什么服务了
+   # 直接启动 spark-shell 就可以了
+   
+   # 此处还有一个小知识点
+   # 无论是 spark-shell, submit 后边会接一个 --master 它后边有如下几种
+   # spark://host:port : 可以跑在资源层为 standalone 的 Spark 自己的
+   # mesos://host:port : 可以是一个第三方的 mesos
+   # yarn : 可以是一个第三方的 yarn
+   # k8s://https://host:port : 可以是一个第三方的 k8s
+   # 以上都是属于分布式, 在此模式下会有 deploy-mode, 它的 Driver 分为 Client/Cluster
+   # local (Default: local[*]) : 或者是多少个 local 线程并行度(这个叫做单机的)
+   --master MASTER_URL         spark://host:port, mesos://host:port, yarn,
+                               k8s://https://host:port, or local (Default: local[*]).
+   --deploy-mode DEPLOY_MODE   Whether to launch the driver program locally ("client") or
+                               on one of the worker machines inside the cluster ("cluster")
+                               (Default: client).
+   # 启动 Spark Yarn 资源层
+   ./spark-shell --master yarn
+   ```
+
+2. **资源层换了，其他东西没变，计算层只有资源层联系的映射处换了，其他没有发生变化，会卡很长时间，它会去找配置项，没有配置就开始 uploading 上边的东西了，如下图：**
+
+   ![spark-shell yarn会卡很长时间](D:\ideaProject\bigdata\bigdata-spark\image\spark-shell_yarn会启动的特别慢.png)
+
+3. **spark-shell yarn 启动成功，如下图：**
+
+   ![spark-shell yarn 启动成功](D:\ideaProject\bigdata\bigdata-spark\image\spark-shell_yarn成功启动.png)
+
+4. **访问 8088，会有一个 Application SPARK，如下图：**
+
+   ![访问 8088 HadoopWebUI](D:\ideaProject\bigdata\bigdata-spark\image\访问HadoopWebUI有Application_Spark.png)
+
+5. **启动 Spark 独立的 History：**
+
+   ```shell
+   # 切换到 hadoop01 Spark sbin 目录下
+   cd $SPARK_HOME
+   cd sbin
+   ./start-history-server.sh
+   ```
+
+6. **hadoop01 启动 spark-shell --master yarn，hadoop01 会有一个 SparkSubmit 的进程，如下图：**
+
+   ![SparkSubmit](D:\ideaProject\bigdata\bigdata-spark\image\spark-shell-master-yarn-SparkSubmit.png)
+
+7. **hadoop02 会有 ExecutorLauncher 进程，如下图：**
+
+   ![ExecutorLauncher](D:\ideaProject\bigdata\bigdata-spark\image\hadoop02_ExecutorLauncher.png)
+
+8. **hadoop03 会有 CoarseGrainedExecutorBackend 进程，如下图：**
+
+   ![hadoop03_CoarseGrainedExecutorBackend](D:\ideaProject\bigdata\bigdata-spark\image\hadoop03_CoarseGrainedExecutorBackend.png)
+
+9. **hadoop04 也会有 CoarseGrainedExecutorBackend 进程，如下图：**
+
+   ![hadoop04_CoarseGrainedExecutorBackend](D:\ideaProject\bigdata\bigdata-spark\image\hadoop04_CoarseGrainedExecutorBackend.png)
+
+10. **Spark 支持 Clien Mode，强制改 Cluster Mode 会报错：**
+
+    ```shell
+    ./spark-shell --master yarn --deploy-mode cluster
+    # 以下是报错信息
+    Error: Cluster deploy mode is not applicable to Spark shells.
+    Run with --help for usage help or --verbose for debug output
+    ```
+
+11. **所以 Spark 只支持 Client Mode，因为要回收数据。此时就凸显一个概念，修改 submit.sh：**
+
+    ```sh
+    #--total-executor-cores 6 \
+    #--executor-cores 1 \
+    class=org.apache.spark.examples.SparkPi
+    jar=$SPARK_HOME/examples/jars/spark-examples_2.11-2.3.4.jar
+    #master=spark://hadoop01:7077,hadoop02:7077
+    master=yarn
+    $SPARK_HOME/bin/spark-submit \
+    --master $master \
+    --deploy-mode cluster \
+    --class  $class \
+    $jar \
+    1000
+    ```
+
+*运行 submit.sh，Cluster Mode 是要把 Driver 推到集群中放到 ApplicationMaster 身上，客户端其实可有可无已经可以把它挂掉了，人家那边还能继续调度。*
+
+##### 4.4.1 总结
+
+***Driver 在哪，其实就是 ApplicationMater，回顾 ApplicationMaster 是怎么诞生的？***
+
+***也是 Yarn 挑了一台不忙的机器，启动了一个 ApplicationMaster。***
+
+**Client Mode Driver 一定会在 Client 进程中，其实 Driver 会跑到集群启动的 ApplicatonMaster，由它去把这个 Driver 变成一个对象，然后它自行执行资源的调度，仅此一个差异。**
+
+#### 4.4 两种 Mode 的差异：
+
+| Mode / API | ExecutorLauncher | ApplicationMaster |
+| :--------: | :--------------: | :---------------: |
+|   Client   |      **√**       |         ×         |
+|  Cluster   |        ×         |       **√**       |
+
+|   Spark / Mode    | Client | Client |
+| :---------------: | :----: | :----: |
+|       shell       | **√**  |   ×    |
+| submit （非repl） | **√**  | **√**  |
+
+### 5.它为什么会慢呢？
+
+在起步阶段，会发现它会变的很慢，它有一系列的 Uploading libraries，生成库的事。
+
+[官网查看研究](https://archive.apache.org/dist/spark/docs/2.3.4/running-on-yarn.html)
+
+调优
+
+```shell
+# 切换到 Spark conf 目录下
+cd $SPARK_HOME
+cd conf
+# 指向所有的 jar 包
+vi spark-defaults.conf
+spark.yarn.jars hdfs://mycluster/work/spark_lib/jars/*
+# 创建目录
+hdfs dfs -mkdir -p /work/spark_lib/jars
+# 切换到 jars 目录下
+cd ../jars
+# 把所有 jar 包上传至 HDFS
+hdfs dfs -put ./* /work/spark_lib/jars
+```
+
+所有 jar 包上传至 HDFS，如下图：
+
+![hdfs put jars](D:\ideaProject\bigdata\bigdata-spark\image\jars上传至HDFS.png)
+
+
+
+再次进入 spark-shell master yarn，会发现没有 Uploading libraries 的提示，如下图：
+
+![没有 Uploading libraries相关提示](D:\ideaProject\bigdata\bigdata-spark\image\没有了Uploadinglibraries的相关提示.png)
+
+会多出压缩包，如下图：
+
+![.sparkStaging](D:\ideaProject\bigdata\bigdata-spark\image\sparkStaging.png)
+
+### 6.调度
+
+#### 6.1 shell 有， submit 也有，效果都一样
+
+```shell
+# standalone HA
+--driver-memory MEM
+--executor-memory MEM
+# 期望消耗的内存, 核心数量
+--executor-cores NUM
+# 在 YARN 中换了另外一个维度
+# 总共有多少个 executor
+--num-executors NUM
+```
+
+#### 6.2 Yarn 是资源层，历史服务器是计算层 MapReduce
 
 ------
 
