@@ -31,7 +31,7 @@ object Lesson06_RDD_Over {
     val res: RDD[(String, Int)] = kv.reduceByKey(_ + _)
     // 如果想让 value 放大 10 倍, 怎么实现 ?
     // 用另外一种写法
-    val res01: RDD[(String, Int)] = res.map(x => (x._1, x._2 * 10))
+    //    val res01: RDD[(String, Int)] = res.map(x => (x._1, x._2 * 10))
     // 推荐写法
     val res01: RDD[(String, Int)] = res.mapValues(x => x * 10)
     // 只要触发 groupByKey(), 就触发了 shuffle 操作, 所以会产生 shuffle 过程
