@@ -7,16 +7,24 @@
 
 
 ## 术语
+> collapsed=`true`
+
 
 ### Application
+> collapsed=`true`
+
 
 #### 启动一个 MapReduce 程序, 其实是启动了一个分布式计算程序, 最小的描述单词
 
 ### Job
+> collapsed=`true`
+
 
 #### 启动了一个分布式计算程序, 其实就是间接启动了一个 Job, 在一个 Job 中只有两个阶段
 
 ### Stage
+> collapsed=`true`
+
 
 #### 一个线性的过程, 在一个阶段中会有一些列并行的 Task
 
@@ -25,32 +33,52 @@
 #### ReduceStage
 
 ### Task
+> collapsed=`true`
+
 
 #### MapTask\(若干\)
+> collapsed=`true`
+
 
 ##### 1\.Input
+> collapsed=`true`
+
 
 ###### 2\.map\(\),filter
+> collapsed=`true`
+
 
 ####### 3\.output, file, local
 
 ####  ReduceTask\(若干\)
+> collapsed=`true`
+
 
 ##### 1\.Input\(迭代器\)
+> collapsed=`true`
+
 
 ###### 2\.reduce\(\), reduceByKey\(嵌套迭代器\)
+> collapsed=`true`
+
 
 ####### 3\.output
 
 ### 比例 : <br/>1@App : 1@Job<br/>1@Job : 1\-2@Stage<br/>1@Stage : N@Task
+> collapsed=`true`
+
 
 #### 如果代码中只做过滤不做统计, 可能没有 Reduce
 
 ### 多个 MR 的 Job 可以组成作业链
 
 ### InpoutFormat
+> collapsed=`true`
+
 
 #### TextInputFormat
+> collapsed=`true`
+
 
 ##### InputFormat 的子类实现, 默认处理文本的类, 这个类有两个地方可以使用到
 
@@ -61,35 +89,515 @@
 ## 架构
 
 ## 应用
+> collapsed=`true`
+
 
 ### 编程模型
+> collapsed=`true`
+
 
 #### RDD
+> collapsed=`true`
+
 
 ##### A Resilient Distributed Dataset
+> collapsed=`true`
+
 
 ###### HadoopRDD
+> collapsed=`true`
+
 
 ####### 文件数据输入
 
 ###### MapPartitionsRDD
 
 ##### A list of partitions SPLITS
+> collapsed=`true`
+
 
 ###### HadoopRDD
+> collapsed=`true`
+
 
 ####### getPartitions
 
 ##### A function for computing each split
+> collapsed=`true`
+
 
 ###### HadoopRDD
+> collapsed=`true`
+
 
 ####### compute\(Partition\)
 
 ##### A list of dependencies on other RDDs
+> collapsed=`true`
+
+
+###### Narrow
+
+###### Shuffle
 
 ##### a Partitioner for key\-value RDDs
 
 ##### a list of preferred locations to compute each split
 
+#### 算子 
+> collapsed=`true`
+
+
+##### Create
+> collapsed=`true`
+
+
+###### sc\.textFile\(\)
+
+##### Transform
+> collapsed=`true`
+
+
+###### Map, flatMap, filter
+
+###### reduceByKey/combineByKey, sortByKey
+
+##### Control
+> collapsed=`true`
+
+
+###### cache, persist, checkpoint
+
+###### repartition, colase
+
+##### Action
+> collapsed=`true`
+
+
+###### foreach, collect, take, count
+
+#### dependencies
+> collapsed=`true`
+
+
+##### Narrow
+
+##### Shuffle
+> collapsed=`true`
+
+
+###### handle
+> collapsed=`true`
+
+
+####### SortShuffleManager
+> collapsed=`true`
+
+
+######## Writer
+
+######## Reader
+
+###### mapSideCombine
+
+###### aggrator
+
+###### Serializer
+
+###### keyOrdering
+
+###### RDD
+
+#### 面向RDD
+> collapsed=`true`
+
+
+##### iterator 是模板方法
+> collapsed=`true`
+
+
+###### persist 中去查找有没有存过数据
+
+###### checkpoint
+> collapsed=`true`
+
+
+####### 从 HDFS 中取数据
+
+###### compute
+> collapsed=`true`
+
+
+####### HadoopRDD
+> collapsed=`true`
+
+
+######## 对文件包装成 iter
+
+####### ShuffleRDD
+> collapsed=`true`
+
+
+######## 调用了 Shuffle\-Reader
+
+##### 是一个单向链表
+> collapsed=`true`
+
+
+###### lineage
+> collapsed=`true`
+
+
+####### 血统
+
+###### Pipline
+> collapsed=`true`
+
+
+####### iterator 的嵌套迭代引用
+
+####### 在一个 Task 中
+
 ## 源码
+> collapsed=`true`
+
+
+### 基于 Standalone
+> collapsed=`true`
+
+
+#### 资源层
+> collapsed=`true`
+
+
+##### 角色
+> collapsed=`true`
+
+
+###### Master
+> collapsed=`true`
+
+
+####### 接受 Worker 的注册、资源的整理
+
+####### 接受计算层的资源申请
+> collapsed=`true`
+
+
+######## Driver
+
+######## Executor
+> collapsed=`true`
+
+
+######### registerApplication
+
+###### Workers
+> collapsed=`true`
+
+
+####### 启动计算层角色
+
+####### 向 Master 汇报资源使用
+
+##### RPC
+> collapsed=`true`
+
+
+###### Endpoint
+> collapsed=`true`
+
+
+####### ref
+
+####### send、ask
+
+####### receive、receiveAndReplay
+
+###### Dispatcher
+
+###### Netty
+
+#### 计算层
+> collapsed=`true`
+
+
+##### Client、Cluster
+> collapsed=`true`
+
+
+###### Driver 在哪里 ?
+> collapsed=`true`
+
+
+####### 什么是 Driver
+> collapsed=`true`
+
+
+######## SparkContext
+
+######## 就是我们自己的逻辑实现 
+
+##### Cluster
+> collapsed=`true`
+
+
+###### 1\.Client
+> collapsed=`true`
+
+
+####### 通过资源层申请 Driver 
+
+###### 2\.Driver
+> collapsed=`true`
+
+
+####### SparkContext
+> collapsed=`true`
+
+
+######## backend
+> collapsed=`true`
+
+
+######### DriverEndpoint
+
+######### appClient
+> collapsed=`true`
+
+
+########## 去资源层的 Master 注册
+> collapsed=`true`
+
+
+########### 在 Master 中触发资源调度
+> collapsed=`true`
+
+
+############ 产生 Executor
+
+###### 3\.ExecutorBackEnd
+> collapsed=`true`
+
+
+####### 向 Driver 反向注册
+
+####### Executor
+> collapsed=`true`
+
+
+######## threadPoll
+> collapsed=`true`
+
+
+######### task
+
+##### 任务调度执行
+> collapsed=`true`
+
+
+###### 1\.RDD 的 Action 算子
+> collapsed=`true`
+
+
+####### sc\.runJob\(\)
+
+###### 2\.DAGScheduler
+> collapsed=`true`
+
+
+####### 是把 Job 的最后一个 RDD 作为参数
+
+####### Stage
+> collapsed=`true`
+
+
+######## 最后一个 RDD 代表最后一个 Stage
+> collapsed=`true`
+
+
+######### Stage 中只有一个 RDD
+
+####### 递归\-遍历
+> collapsed=`true`
+
+
+######## 递归
+> collapsed=`true`
+
+
+######### 以 Stage 换言之以 ShuffleDep 为边界
+
+######## 遍历
+> collapsed=`true`
+
+
+######### 寻找 ShuffleDep 的过程是触发的遍历
+
+####### 回归过程中触发 task 调度提交
+
+####### Stage
+> collapsed=`true`
+
+
+######## task 的数量是最后一个 RDD 的分区数量
+
+######## 最佳计算位置
+
+######## Stage 会产生一个 taskBinary, 并广播出去
+
+######## 一个 Stage 根据分区数, 产生对应的 task
+
+######## 最终将 tasks 填充到 TaskSet
+> collapsed=`true`
+
+
+######### 触发 TaskScheduler
+
+###### 3\.TaskScheduler
+> collapsed=`true`
+
+
+####### schdduleMode
+> collapsed=`true`
+
+
+######## FIFO
+
+######## Pair
+
+####### TaskSetManager
+
+###### 4\.Executor
+> collapsed=`true`
+
+
+####### runTask
+> collapsed=`true`
+
+
+######## SparkEnv
+> collapsed=`true`
+
+
+######### MemoryManager
+> collapsed=`true`
+
+
+########## ExecutionMemory
+
+########## memoryStore
+
+######### BlockManager
+
+######### MapOutputTracker
+
+######### NettyBlockTransferService
+
+######## Task
+> collapsed=`true`
+
+
+######### 1\.输入
+> collapsed=`true`
+
+
+########## HadoopRDD
+
+########## Persist
+
+########## checkpoint
+
+########## Shuffle\-Reader
+
+######### 2\.计算
+> collapsed=`true`
+
+
+########## Pipline : iter
+
+######### 3\.输出
+> collapsed=`true`
+
+
+########## Shuffle\-Writer
+
+########## Result
+
+######## SortShuffleManager
+> collapsed=`true`
+
+
+######### registerHandle
+
+######### getWriter
+> collapsed=`true`
+
+
+########## BypassMergeSortShuffleWriter
+
+########## BaseShuffleHandle
+> collapsed=`true`
+
+
+########### map
+
+########### buffer
+
+########## UnsafeShuffleWriter
+
+######### getReader
+> collapsed=`true`
+
+
+########## dep
+> collapsed=`true`
+
+
+########### iter
+
+######## BlockManager
+> collapsed=`true`
+
+
+######### Shuffle\-Witer
+> collapsed=`true`
+
+
+########## Disk
+
+######### persist
+> collapsed=`true`
+
+
+########## StorageLevel
+> collapsed=`true`
+
+
+########### MemoryOnly
+
+########### MemoryAndDisk
+
+########### Serializer
+
+######### broadcast
+
+######## TaskMemoryManager
+> collapsed=`true`
+
+
+######### 每 Task 一个
+
+######### 计算过程中
+> collapsed=`true`
+
+
+########## Shuffle\-Writer
+> collapsed=`true`
+
+
+########### UnsafeShuffleWriter
+
+########### BaseShuffleHandle
+
+########### 计算过程中的缓冲区

@@ -1,4 +1,4 @@
-package com.syndra.bigdata.spark
+package com.syndra.bigdata.Lesson08_Other
 
 import org.apache.spark.rdd.RDD
 import org.apache.spark.{SparkConf, SparkContext}

@@ -7,7 +7,7 @@
 已经执行的任务 RDD，如果别的任务有服用则直接使用
 
 ```scala
-package com.syndra.bigdata.spark
+package com.syndra.bigdata.Lesson08_Other
 
 import org.apache.spark.rdd.RDD
 import org.apache.spark.{SparkConf, SparkContext}
@@ -69,7 +69,7 @@ object WordCountScala {
       (x._2, 1)
     })
     // 基于 数字几个的 进行统计
-    val resOver:RDD[(Int, Int)] = fanzhuan.reduceByKey(_ + _)
+    val resOver: RDD[(Int, Int)] = fanzhuan.reduceByKey(_ + _)
     // 第一个 Job
     res.foreach(println)
     // 进行打印
@@ -1178,7 +1178,7 @@ override def getDependencies: Seq[Dependency[_]] = {
 **1.Spark_RDD_API_Example**
 
 ```scala
-package com.syndra.bigdata.spark
+package com.syndra.bigdata.Lesson08_Other
 
 import org.apache.spark.rdd.RDD
 import org.apache.spark.{SparkConf, SparkContext}
@@ -1588,7 +1588,7 @@ class CoGroupedRDD[K: ClassTag](
 **3.RDD_API_Sort_Operations**
 
 ```scala
-package com.syndra.bigdata.spark
+package com.syndra.bigdata.Lesson08_Other
 
 import org.apache.spark.rdd.RDD
 import org.apache.spark.{SparkConf, SparkContext}
@@ -1702,7 +1702,7 @@ Idea 运行结果：
 **1.Spark RDD Aggregator Compute**
 
 ```scala
-package com.syndra.bigdata.spark
+package com.syndra.bigdata.Lesson08_Other
 
 import org.apache.spark.rdd.RDD
 import org.apache.spark.{SparkConf, SparkContext}
@@ -1889,7 +1889,7 @@ Avg 的 Job 复杂度：
 **2.Spark RDD Oriented Partitions Operations**
 
 ```scala
-package com.syndra.bigdata.spark
+package com.syndra.bigdata.Lesson08_Other
 
 import org.apache.spark.rdd.RDD
 import org.apache.spark.{SparkConf, SparkContext}
@@ -1999,7 +1999,7 @@ object Lesson04_RDD_Partitions {
 **3.Spark RDD High Level**
 
 ```scala
-package com.syndra.bigdata.spark
+package com.syndra.bigdata.Lesson08_Other
 
 import org.apache.spark.rdd.RDD
 import org.apache.spark.{SparkConf, SparkContext}
@@ -2104,7 +2104,7 @@ def repartition(numPartitions: Int)(implicit ord: Ordering[T] = null): RDD[T] = 
 ## 章节9：Spark-CORE，二次排序，分组取TopN，算子综合应用
 
 ```scala
-package com.syndra.bigdata.spark
+package com.syndra.bigdata.Lesson08_Other
 
 import org.apache.spark.rdd.RDD
 import org.apache.spark.{SparkConf, SparkContext}
