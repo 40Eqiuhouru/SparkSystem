@@ -1,0 +1,652 @@
+# `Spark—SQL`
+
+------
+
+## 章节 26：`Spark—SQL`，大数据中的`SQL`组成原理
+
+------
+
+### 一、为什么会有`Hive`出现？
+
+是因为`MapReduce`写起来太麻烦了吗？不可否认，这的确是他其中一个问题。
+
+一般的回答是， `MapReduce`写起来太复杂效率很低，所以`Hive`会接收`SQL`。那如果写`SQL`的话那就一定会比编程容易且受众也多，所以`Hive`出现了。基于`Hive`使用的过程中可以轻松地构建所谓的数仓。
+
+但是，从另外一个维度。如果现在在一家公司工作了十年，这十年里公司会产生很多很多的数据，你会把你的数据存储到`HDFS`、`HBase`，`HDFS`存储了很多很多的数据。那么在将很多很多的数据存储到`HDFS`中会有各种类型的数据以文件文本的方式存进去。也就代表会有很多目录及文件。那么突然因为工作时间很久了，此时突然说了一句话，随便指向了一个文件请告诉我它第某某列代表的意思。在数据存储时都希望人为干预的压缩，也就是字典的概念。
+
+#### 1.1————如果我们面向数据的时候，如果数据存成模型或者模式。
+
+站在文件的维度一个维度是`data`，一个维度是元数据，但是此元数据是描述文件级别的，这两个维度的数据在`HDFS`文件系统中元数据交给了`NataNode`，数据切割成块儿后，打散到集群给`DataNode`。
+
+##### 1.1.1—————`File Model`
+
+其实站在文件的角度来存储管理文件时，其实丢了一笔数据这个数据也叫元数据，是数据的元数据`Data Metastore`。描述他们怎么分割，有哪些列是什么类型等等。
+
+##### 1.1.2—————`Table Model`
+
+还有另外一种模型是`Table`，一个`Table`具备`schema`，一部分对文件数据的元数据其实在`schema`中。另外一个就是表中的所有行`row`也就是数据。也就是说`schema + row`是表的模式。以结构化的方式存储数据。在有了`schema`和`row`后如果想查表中的数据那么就需要`SQL`，在文件模式下操作只有`Read/Write`。
+
+###### 2.1——————`Metastore`
+
+用数据库做的是持久化，`Metastore`只提供了元数据的对外结构，那么此时光有元数据是不够的。因为还要解决`SQL`问题，在`Hive`的架构中，`SQL`其实是文本，会调用解析器`Driver`，`Driver`会调用`yarn`推送一个`MR Program`提交的过程，即`Driver`起到提交的过程。通过`Metastore`完成与`Driver`的元数据交互。
+
+#### 1.2————用户`SQL`到达`Drvier`的过程
+
+##### 1.2.1—————第一种已经被淘汰的方式
+
+`Hive Cli`，如果在某台`Linux`的集群中敲了个`Hive Cli`的话。`Cli`=`Command line interface`，它有一个约束，必须要登录到那台机器中启动它才能电影命令行执行`SQL`。
+
+##### 1.2.2—————第二种方式`HiveServer2`
+
+`Cli`只支持一个用户，`HiveServer2`支持多用户连接。用户不可以直接把`SQL`交给`HiveServer2`，因为其只能对外暴漏`JDBC`的`Thritf`协议的连接。此时要启动一个`beeline`。
+
+最终用户把`SQL`交给`beeline`，由`beeline`提交`SQL`。
+
+------
+
+### 二、`Hive`中最值钱的就是`Metastore`
+
+------
+
+### 三、基于`Driver`的`API`级别的适配
+
+非常重要的一个环节，它是`API`级别的适配。也就是说你只要有这个`API`的适配那么你可以适配这个世界上任何其他的计算框架，只要`SQL`解析完适配就可以了。
+
+但是有一个小小的瑕疵，比如说如果是`Spark`只有`RDD`，那么其实无所谓，因为它暴露的API趋向于固定。
+
+首先说计算框架第三方的`Hive`这个团队和`Spark`团队，`Hive`团队他是主要负责了对于`SQL`的解析过程，可以产生一些逻辑执行优化，其中也有一堆优化的东西。但优化的东西只能是依赖`API`级别。
+
+### 四、`Hive Model`
+
+#### 4.1————`Hive on Spark`
+
+在`Hive`中将计算框架改成`Spark`，就是把适配实现改成了`Spark`，这个速度不是特别快。
+
+#### 4.2————`shark`
+
+`Spark`团队把`Hive`的适配做到极致。`Spark`曾经被研发出时，它暴露出来了一个比较严重的问题，出现的一个词叫做`RDD`。
+
+最后的`D`是`DataSet`，模仿的是`Scala`中的`collection`这种集合的函数。是比较`Low Level`的，比如`flatMap, fliter`，所以此时`RDD`并不是太向上适配`SQL`。因为`SQL`语句中没有出现`flatMap`。`SQL`只有`groupByKey`，其实等等这个操作和`RDD`之间的贯通的`API`的距离比较远。
+
+#### 4.3————`Spark on Hive`
+
+这也是为什么在第三个版本中，`Spark`要做`Spark on Hive`，但是这其中出现了一个东西**真正的`DataSet`**，而且在这个过程中，`RDD`受限于`DAGScheduler`。
+
+#### 4.4————`HQL`
+
+在公司中`HQL`是趋向于稳定的。
+
+------
+
+### 五、`Spark—SQL`
+
+面向元数据有三种形式
+
+1. **临时的`Application`**
+2. **`on Hive`自主**
+3. **`on Hive`整合**
+
+`Spark`在执行的时候可以没有`Metastore`，那么他是怎么去做这件事情的？
+
+##### 5.1————`cataLog`
+
+`Spark`没有重新开发一个`Metastore`，这个产品在很多个技术中都会出现，术语叫`cataLog`，编目、目录。
+
+`Cloudera`整合搭建，`Kylin`整合技术连通使用。
+
+如果非关系型然后数量很大，理想的`Redis`但是太小，那么此时如果复杂度又比较多的话，其实可以走`ElasticSearch`。
+
+------
+
+### 六、总结
+
+1. **引出了什么是`Spark—SQL`以及它的一些特征还有解析过程，尤其是在分布式下**
+2. **最终`Spark—SQL`也是趋向于和`Hive`整合，因此抛出了一系列的概念，会在后续章节对其进行推理并分析源码**
+3. **期望的是纯写`SQL`**
+
+------
+
+## 章节 27：`Spark—SQL`，`DataFram`到`Dataset`的开发
+
+------
+
+回忆之前的`CORE`编程时，只有`RDD`时，它有一个上下文的类`SparkContext`，可以维护创建`RDD`提交作业。`SQL`其实是对`CORE`的一种包装，一种外挂的东西，就是把它丰富起来了。
+
+尤其是它其中的`Dataset`其实是对`RDD`上层的一种包裹。`Dataset`并不能触发作业，`Dataset`最终是要转换回`RDD`才能触发作业，这是一个潜台词。
+
+`DataFrame`是一个类型，就和别名一样，本质是一个`Dataset`只不过其中数据元素的类型是`row`类型。
+
+```scala
+package org.apache.spark
+
+import org.apache.spark.annotation.{DeveloperApi, InterfaceStability}
+import org.apache.spark.sql.execution.SparkStrategy
+
+/**
+ * Allows the execution of relational queries, including those expressed in SQL using Spark.
+ *
+ *  @groupname dataType Data types
+ *  @groupdesc Spark SQL data types.
+ *  @groupprio dataType -3
+ *  @groupname field Field
+ *  @groupprio field -2
+ *  @groupname row Row
+ *  @groupprio row -1
+ */
+package object sql {
+
+  /**
+   * Converts a logical plan into zero or more SparkPlans.  This API is exposed for experimenting
+   * with the query planner and is not designed to be stable across spark releases.  Developers
+   * writing libraries should instead consider using the stable APIs provided in
+   * [[org.apache.spark.sql.sources]]
+   */
+  @DeveloperApi
+  @InterfaceStability.Unstable
+  type Strategy = SparkStrategy
+
+  type DataFrame = Dataset[Row]
+}
+```
+
+------
+
+### 一、感受`Spark—SQL`
+
+```scala
+package com.syndra.bigdfata.sql
+
+import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.sql.{DataFrame, SparkSession}
+
+/**
+ * Spark SQL basic
+ * <br>
+ * <p>SQL 字符串 → Dataset 对 RDD 的一个包装(优化器) → 只有 RDD 才能触发 DAGScheduler.
+ */
+object Lesson01_SQL_Basic {
+  def main(args: Array[String]): Unit = {
+    // 变化 :
+    val conf: SparkConf = new SparkConf().setMaster("local").setAppName("sql")
+    val session: SparkSession = SparkSession
+      .builder()
+      .config(conf)
+      //      .appName("sql")
+      //      .master("local")
+      //.enableHiveSupport() // 开启这个选项是 Spark—SQL on Hive 才支持 DDL, 没开启 Spark 只有 cataLog
+      .getOrCreate()
+
+    // 通过 SparkSession 获取 SparkContext
+    val sc: SparkContext = session.sparkContext
+    sc.setLogLevel("ERROR")
+
+    // 以 session 为主的操作演示
+    // DataFrame 是 Dataset 类型
+    val df: DataFrame = session.read.json("D:\\ideaProject\\bigdata\\bigdata-spark\\data\\json")
+    df.show()
+    df.printSchema()
+  }
+}
+
+```
+
+------
+
+### 二、`cataLog`基本语法
+
+```scala
+package com.syndra.bigdfata.sql
+
+import org.apache.spark.sql.catalog.{Database, Function, Table}
+import org.apache.spark.sql.{DataFrame, Dataset, SparkSession}
+import org.apache.spark.{SparkConf, SparkContext}
+
+/**
+ * Spark SQL basic
+ * <br>
+ * <p>SQL 字符串 → Dataset 对 RDD 的一个包装(优化器) → 只有 RDD 才能触发 DAGScheduler.
+ */
+object Lesson01_SQL_Basic {
+  def main(args: Array[String]): Unit = {
+    // 变化 :
+    val conf: SparkConf = new SparkConf().setMaster("local").setAppName("sql")
+    val session: SparkSession = SparkSession
+      .builder()
+      .config(conf)
+      //      .appName("sql")
+      //      .master("local")
+      //.enableHiveSupport() // 开启这个选项是 Spark—SQL on Hive 才支持 DDL, 没开启 Spark 只有 cataLog
+      .getOrCreate()
+
+    // 通过 SparkSession 获取 SparkContext
+    val sc: SparkContext = session.sparkContext
+    sc.setLogLevel("ERROR")
+
+    // 以 session 为主的操作演示
+    // DataFrame 是 Dataset[row]
+
+    // SQL 为中心
+    val databases: Dataset[Database] = session.catalog.listDatabases()
+    databases.show()
+    val tables: Dataset[Table] = session.catalog.listTables()
+    tables.show()
+    val functions: Dataset[Function] = session.catalog.listFunctions()
+    functions.show(999, true)
+
+    println("————————————————————————")
+
+    val df: DataFrame = session.read.json("D:\\ideaProject\\bigdata\\bigdata-spark\\data\\json")
+    df.show()
+    df.printSchema()
+
+    // 这一过程是 df 通过 session 像 cataLog 中注册表名
+    df.createTempView("sql_test")
+
+    val frame: DataFrame = session.sql("select * from sql_test")
+    frame.show()
+
+    println("————————————————————————")
+
+    session.catalog.listTables().show()
+  }
+}
+
+```
+
+其中`show()`是`Action`算子。
+
+------
+
+### 三、`Spark—SQL—API`
+
+**数据 + 元数据 = `df`**
+
+`DataFrame`倾向于有表头，列，元数据且从其中保存了一批对应列每个行的数据。换言之，`DataFrame`就是一张表。
+
+基于`JSON`格式的`SQL`
+
+```scala
+package com.syndra.bigdfata.sql
+
+import org.apache.spark.rdd.RDD
+import org.apache.spark.sql.types.{DataTypes, StructField, StructType}
+import org.apache.spark.sql.{DataFrame, Row, SparkSession}
+import org.apache.spark.{SparkConf, SparkContext}
+
+/**
+ * Spark SQL API
+ */
+object Lesson02_SQL_API01 {
+  def main(args: Array[String]): Unit = {
+    val conf: SparkConf = new SparkConf().setMaster("local").setAppName("API")
+    val session: SparkSession = SparkSession
+      .builder()
+      .config(conf)
+      .getOrCreate()
+
+    val sc: SparkContext = session.sparkContext
+    sc.setLogLevel("ERROR")
+
+    // 数据 + 元数据 = df 就是一张表
+
+    // 1.数据 : RDD[Row]
+    val rdd: RDD[String] = sc.textFile("D:\\ideaProject\\bigdata\\bigdata-spark\\data\\person.txt")
+    val rddRow: RDD[Row] = rdd.map(_.split(" ")).map(arr => Row.apply(arr(0), arr(1).toInt))
+
+    // 2.元数据 : StructType
+    val fields = Array(
+      StructField.apply("name", DataTypes.StringType, nullable = true),
+      StructField.apply("age", DataTypes.IntegerType, nullable = true)
+    )
+    val schema: StructType = StructType.apply(fields)
+
+    val dataFrame: DataFrame = session.createDataFrame(rddRow, schema)
+    dataFrame.show()
+    dataFrame.printSchema()
+    dataFrame.createTempView("person")
+    session.sql("SELECT * FROM person").show()
+  }
+}
+
+```
+
+- **第一种方式：`RDD[Row] + StructType`**
+
+  ```scala
+  package com.syndra.bigdfata.sql
+  
+  import org.apache.spark.rdd.RDD
+  import org.apache.spark.sql.types.{DataTypes, StructField, StructType}
+  import org.apache.spark.sql.{DataFrame, Row, SparkSession}
+  import org.apache.spark.{SparkConf, SparkContext}
+  
+  /**
+   * Spark SQL API
+   */
+  object Lesson02_SQL_API01 {
+    def main(args: Array[String]): Unit = {
+      val conf: SparkConf = new SparkConf().setMaster("local").setAppName("API")
+      val session: SparkSession = SparkSession
+        .builder()
+        .config(conf)
+        .getOrCreate()
+  
+      val sc: SparkContext = session.sparkContext
+      sc.setLogLevel("ERROR")
+      val rdd: RDD[String] = sc.textFile("D:\\ideaProject\\bigdata\\bigdata-spark\\data\\person.txt")
+  
+      // 第二种方式 : bean 类型的 RDD + javabean
+  
+      // V1.1 : 动态封装
+      val userSchema = Array(
+        "name string",
+        "age int",
+        "sex int"
+      )
+  
+      // 1. Rdd[Row]
+      /* UtilMethod */
+      def toDataType(f: (String, Int)): Any = {
+        userSchema(f._2).split(" ")(1) match {
+          case "string" => f._1.toString
+          case "int" => f._1.toInt
+        }
+      }
+  
+      val rowRDD: RDD[Row] = rdd.map(_.split(" "))
+        .map(x => x.zipWithIndex)
+        // [(WangZX, 0), (18, 1), (0, 2)]
+        .map(x => x.map(toDataType(_)))
+        .map(x => Row.fromSeq(x)) // Row 代表着很多的列, 每个列要标识出准确的类型
+  
+      // 2.StructType
+      /* UtilMethod */
+      def getDataType(t: String) = {
+        t match {
+          case "string" => DataTypes.StringType
+          case "int" => DataTypes.IntegerType
+        }
+      }
+  
+      val fields: Array[StructField] = userSchema.map(_.split(" "))
+        .map(x => StructField.apply(x(0), getDataType(x(1)), nullable = true))
+  
+      val schema: StructType = StructType.apply(fields)
+  
+      val schema01: StructType = StructType.fromDDL("name string, age int, sex int")
+      val df: DataFrame = session.createDataFrame(rowRDD, schema01)
+      df.show()
+      df.printSchema()
+    }
+  }
+  ```
+
+- **第二种方式：`RDD[bean] + javabean`**
+
+  ```scala
+  package com.syndra.bigdfata.sql
+  
+  import org.apache.spark.rdd.RDD
+  import org.apache.spark.sql.{DataFrame, Dataset, SparkSession}
+  import org.apache.spark.{SparkConf, SparkContext}
+  
+  import scala.beans.BeanProperty
+  
+  /**
+   * Spark SQL API
+   */
+  object Lesson02_SQL_API01 {
+    def main(args: Array[String]): Unit = {
+      val conf: SparkConf = new SparkConf().setMaster("local").setAppName("API")
+      val session: SparkSession = SparkSession
+        .builder()
+        .config(conf)
+        .getOrCreate()
+  
+      val sc: SparkContext = session.sparkContext
+      sc.setLogLevel("ERROR")
+      val rdd: RDD[String] = sc.textFile("D:\\ideaProject\\bigdata\\bigdata-spark\\data\\person.txt")
+      // 第二种方式 : bean 类型的 RDD + javabean
+      val p = new Person()
+      // 1.无论 MR | Spark 都属于 Pipeline 也就是 iter 一次内存飞过一条数据 → 这一条记录完成读取/计算/序列化
+      // 2.分布式计算, 计算逻辑由 Driver 序列化发送给其他 JVM 的 Executor 中执行
+      val rddBean: RDD[Person] = rdd.map(_.split(" "))
+        .map(arr => {
+          //        val p = new Person()
+          p.setName(arr(0))
+          p.setAge(arr(1).toInt)
+          p
+        })
+  
+      val df: DataFrame = session.createDataFrame(rddBean, classOf[Person])
+      df.show()
+      df.printSchema()
+    }
+  }
+  class Person extends Serializable {
+    @BeanProperty
+    var name: String = ""
+    @BeanProperty
+    var age: Int = 0
+  }
+  ```
+
+#### 3.1————为什么`Spark`中没有实现自己的`metastore`，而是它实现了一个`cataLog`？
+
+因为它想和`Hive`结合用别人的`metastore`就没有必要自己关起门造轮子，从所有`DDL`的解析以及`DDL`这个`HQL`语法规则，都借用`metastore`，所以`cataLog`只是一个被动的目录。
+
+它不做`DDL`语法解析，不做元数据存储，所以它不叫作`metastore`。
+
+#### 3.2————有`metastore`后，`cataLog`的作用？
+
+这是一个差集全集子集的概念，`Spark—SQL + Metastore`这是一个完整的，既有`SQL`的解析又有`meatstore`也有`HQL`语法。然后能查能存有元数据管理，能操作所有`SQL`，这是完整的。
+
+但是现在讲的版本是砍掉了`Hive`元数据这一块，所以它就缺失了`DDL`的创建的过程。所以此时这样的场景中就需要一个东西`cataLog`。基于内存临时的缓冲的，因为缩表不需要通过`DDL`来`create`，你的表就是`DataFrame`，它就不需要`DDL`了，所以只需要有一个映射关系。可以把`cataLog`想象成`HashMap`。
+
+------
+
+### 四、`Dataset`
+
+`Dataset`如果想把数据由非结构变成结构化的话，最好是转成`Tuple`。
+
+`Dataset`强的地方在于，它其中过滤数据有识别，反序列化，优化序列化。它需要编码器能够明确的而且编码器最好是可以对未来的数据能做到寻址。优化虚拟化使用方式尽量数据在内存中不成为对象，因为给出一个合适的编码器就可以让数据一直在内存中变成字节数组。在分析源码时也知道数据在内存中是对象还是字节数组他们成本开销是不一样的，而且如果变成数组的话还可以充分利用它的钨斯计划。要么放在堆中变成字节数组，要么放在堆外变成字节数组。
+
+```scala
+package com.syndra.bigdfata.sql
+
+import org.apache.spark.rdd.RDD
+import org.apache.spark.sql.{DataFrame, Dataset, Encoders, SparkSession}
+import org.apache.spark.{SparkConf, SparkContext}
+
+import scala.beans.BeanProperty
+
+/**
+ * Spark SQL API
+ */
+object Lesson02_SQL_API01 {
+  def main(args: Array[String]): Unit = {
+    val conf: SparkConf = new SparkConf().setMaster("local").setAppName("API")
+    val session: SparkSession = SparkSession
+      .builder()
+      .config(conf)
+      .getOrCreate()
+
+    val sc: SparkContext = session.sparkContext
+    sc.setLogLevel("ERROR")
+    val rdd: RDD[String] = sc.textFile("D:\\ideaProject\\bigdata\\bigdata-spark\\data\\person.txt")
+
+    // Spark 的 Dataset 即可以按 collection 类似于 RDD 的方法操作, 也可以按 SQL 领域语言定义的方式操作数据
+    //    import session.implicits._
+
+    /* 纯文本文件, 不带自描述, string 不被待见
+    *  必须转结构化...再参与计算
+    *  转换的过程可以由 Spark 完成
+    *  Hive 数仓
+    *  
+    * */
+    val ds01: Dataset[String] = session.read.textFile("D:\\ideaProject\\bigdata\\bigdata-spark\\data\\person.txt")
+    val person: Dataset[(String, Int)] = ds01.map(
+      line => {
+        val strings = line.split(" ")
+        (strings(0), strings(1).toInt)
+      })(Encoders.tuple(Encoders.STRING, Encoders.scalaInt))
+    val cperson: DataFrame = person.toDF("name", "age")
+    cperson.show()
+    cperson.printSchema()
+  }
+}
+
+class Person extends Serializable {
+  @BeanProperty
+  var name: String = ""
+  @BeanProperty
+  var age: Int = 0
+}
+```
+
+接数接的是源数据，不删除不破坏，这个整体的过程叫做`ETL`，也叫做中间态。所有的计算发生在中间态。
+
+中间态→一切以后续计算成本为考量
+
+- **文件格式类型，哪种会用哪种，后续的计算场景更需要哪种类型选哪种类型。**
+- **分区/分桶，在未来计算时，分区表可以让计算起步加载的数据量变少，分桶是会让计算过程当中的`Shuffle`移动数据量变少。**
+
+这两方面可以极大地优化`IO`，一个是加载`IO`一个是`Shuffle IO`。
+
+最终趋向于抛弃`RDD`使用`Dataset`。
+
+------
+
+## 章节 28：`Spark—SQL`，整合`Hive`的`MetaStore`搭建企业级数仓——Ⅰ
+
+------
+
+通过`session`的隐式转换，可以通过这种方式`toDF()`，`toDF()`的好处是可以加一些列名。`toDS()`是一个不带列名的数据集。
+
+`Dataset`可以支持`collection`这种数据集的操作，也可以支持`SQL`风格的操作。
+
+------
+
+### 一、`SQL API`
+
+- **基于文件形式**
+  - `session.read.parquet()`
+  - `session.read.textFile()`
+  - `session.read.json()`
+  - `session.read.csv()`
+- **读取任何格式的数据源都要转换成`DF`**
+  - `res.write.parquet()`
+  - `res.write.orc()`
+  - `res.write.text()`
+
+------
+
+### 二、`JDBC`
+
+```scala
+val session: SparkSession = SparkSession
+      .builder()
+      .appName("SQL_JDBC")
+      .master("local")
+      .config("spark.sql.shuffle.partitions", "1") // 默认会有 200 并行度
+      .getOrCreate()
+val pro = new Properties()
+    pro.put("url", "jdbc:mysql://hadoop01/spark")
+    pro.put("user", "root")
+    pro.put("password", "120912")
+    pro.put("driver", "com.mysql.cj.jdbc.Driver")
+```
+
+**什么数据源拿到的都是`DS/DF`**。
+
+------
+
+### 三、`Standalone_Hive`
+
+#### 3.1————开启`Hive`支持
+
+```scala
+val s: SparkSession = SparkSession
+      .builder()
+      .master("local")
+      .appName("Standalone_Hive")
+      .config("spark.sql.shuffle.partitions", 1)
+      .enableHiveSupport() // 开启 Hive 支持
+      .getOrCreate()
+```
+
+以上在运行时会报如下错
+
+```scala
+Exception in thread "main" java.lang.IllegalArgumentException: Unable to instantiate SparkSession with Hive support because Hive classes are not found.
+	at org.apache.spark.sql.SparkSession$Builder.enableHiveSupport(SparkSession.scala:869)
+	at com.syndra.bigdata.sql.Lesson04_SQL_Standalone_Hive$.main(Lesson04_SQL_Standalone_Hive.scala:16)
+	at com.syndra.bigdata.sql.Lesson04_SQL_Standalone_Hive.main(Lesson04_SQL_Standalone_Hive.scala)
+```
+
+需要引入`spark_hive`依赖
+
+```java
+<!-- https://mvnrepository.com/artifact/org.apache.spark/spark-hive -->
+<dependency>
+  <groupId>org.apache.spark</groupId>
+  <artifactId>spark-hive_2.11</artifactId>
+  <version>2.3.4</version>
+</dependency>
+```
+
+所谓的大数据中建表就是创建一个目录。
+
+##### 3.1.1—————`enableHiveSupport()`
+
+自己会启动`Hive`的`Metastore`。
+
+#### 3.2————数据库的概念
+
+一定要有数据库的概念，其实它现在的作用域是默认库，它进来默认走`use default`，
+
+```scala
+config("spark.sql.warehouse.dir", "D:\\ideaProject\\bigdata\\bigdata-spark\\warehouse")
+```
+
+给出的目录并不是库的意思，代表可以向哪个目录下放东西。但是在整个程序执行的时候，他已经把默认库绑定到了这个目录下。程序启动之前和程序启动之后这是两个时间维度。
+
+真正在企业中会做分库，因为有的数据可能只有咱们这几个部门或这几个项目组使用，然后别人用的时候可以用别的库。
+
+`MySQL`是个软件，管理数据库的软件，一个`MySQL`可以创建很多的库`Database`这些库是隔离的，所以公司只装一个`MySQL`，不同的项目组自己用自己的库`Database`。`Spark/Hive`也是一样的。
+
+##### 3.2.1—————`Hive`很重要
+
+```scala
+import s.sql
+s.catalog.listTables().show() // 作用在 current 库
+
+sql("create database syndra")
+sql("create table table01(name string)") // 作用在 current 库
+s.catalog.listTables().show() // 作用在 current 库
+
+println("————————————————————")
+
+sql("use syndra")
+s.catalog.listTables().show() // 作用在 syndra 库
+
+sql("create table table02(name string)") // 作用在 current 库
+s.catalog.listTables().show() // 作用在 syndra 库
+```
+
+------
+
+### 四、总结
+
+外界不需要准备环境，`Spark`自己就可以玩，只要`enableHiveSupport()`它就可以自包含的启动一个`MetaStore`支持`DDL`语句等等操作。
+
+------
+
+## 章节 29：`Spark—SQL`，整合`Hive`的`MetaStore`搭建企业级数仓——Ⅱ
+
+主要是如何贴近企业中实际去用，生产环境中不可能这么去用。要刻意注意，很多人学架构时会特别在意项目这件事。但如果学大数据的话，不要刻意把项目这个事放在心上。项目被弱化了，整个公司有一个大数据集群所有的数据都放入其中。由此衍生出中台的概念。
+
+需要配置`Hive`的`url`的地址`thrift`。所有技术的衔接点是靠这个衔接的。
+
+**一家公司的元数据在变化上是趋向于稳定的**，每家公司不可能天天的对表做改动。元数据访问的都是`MySQL`的一端，`MySQL`等于做了一个负载均衡，仅此而已。
+
