@@ -586,7 +586,7 @@ Exception in thread "main" java.lang.IllegalArgumentException: Unable to instant
 
 需要引入`spark_hive`依赖
 
-```java
+```xml
 <!-- https://mvnrepository.com/artifact/org.apache.spark/spark-hive -->
 <dependency>
   <groupId>org.apache.spark</groupId>
@@ -649,4 +649,261 @@ s.catalog.listTables().show() // 作用在 syndra 库
 需要配置`Hive`的`url`的地址`thrift`。所有技术的衔接点是靠这个衔接的。
 
 **一家公司的元数据在变化上是趋向于稳定的**，每家公司不可能天天的对表做改动。元数据访问的都是`MySQL`的一端，`MySQL`等于做了一个负载均衡，仅此而已。
+
+------
+
+### 一、`Spark on Hive`
+
+```scala
+.config("hive.metastore.uris", "thrift://hadoop03:9083")
+.enableHiveSupport()
+```
+
+以上为连接`Hive`的配套配置，需要整合`MetaStore`，因此需要通过`uri`。
+
+`cataLog`是可以访问全局的库。
+
+#### 1.1————`createTempView()`
+
+```scala
+val df01: DataFrame = List(
+      "Syndra",
+      "WangZX"
+    ).toDF("name")
+    df01.createTempView("tmp")
+```
+
+临时表，只在内存中有用。其实`Spark—SQL Driver`和`MetaStore`是有一个互动的过程。只不过那些临时的表示在它的内存中，然后剩下的`DDL`语句创建的还有原有的都会在`MetaStore`进行同步。
+
+#### 2.2————`Linux`中配置`Spark on Hive`
+
+##### 2.1.1—————修改`hive-site.xml`
+
+在`spark/conf`目录下，`cp hive-2.3.4/conf/hive-site.xml ./`需要修改配置
+
+```xml
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?><!--
+   Licensed to the Apache Software Foundation (ASF) under one or more
+   contributor license agreements.  See the NOTICE file distributed with
+   this work for additional information regarding copyright ownership.
+   The ASF licenses this file to You under the Apache License, Version 2.0
+   (the "License"); you may not use this file except in compliance with
+   the License.  You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+-->
+<configuration>
+     <property>
+         <name>hive.metastore.uris</name>
+         <value>thrift://hadoop03:9083</value>
+     </property>
+</configuration>
+```
+
+##### 2.2.2—————修改`spark-defaults.conf`
+
+`spark-defaults.conf`需要修改的配置`hive.metastore.uris thrift://hadoop03:9083`。
+
+##### 2.2.3—————启动`spark-shell`
+
+随后输入`./spark-shell --master yarn`即可启动，如下图
+
+![SparkonHive](D:\ideaProject\bigdata\bigdata-spark\image\spark-shellonhive.png)
+
+会有一行`Warning: Ignoring non-spark config property: hive.metastore.uris=thrift://hadoop03:9083`的提示，至此就可以在`Linux`中写`Spark—SQL`并且不用`IDEA`了。
+
+测试`SparkonHive`的`SQL`语句，如下图
+
+![test_sparkonhive_sql](D:\ideaProject\bigdata\bigdata-spark\image\test_spark-shellonhive.png)
+
+但是这个过程有些繁琐，这样一个企业级应该做的事，在任何位置可以向它去发送`SQL`语句。在`spark-shell`运行起来后，在整个集群中会**启动一个`Application`长运行**，如下图的
+
+![spark-shell长运行](D:\ideaProject\bigdata\bigdata-spark\image\spark-shell长运行.png)
+
+`Linux`中的`spark-shell`**集群不停，它就一直处于`RUNNING`状态**。且这个`Application`还持有了一些`Container`，如下图
+
+![Application 持有的 Container](D:\ideaProject\bigdata\bigdata-spark\image\Application持有的container.png)
+
+而且通过`WebUI`也可以知道，`Driver`启动了两个`Executor`。
+
+`hadoop04`的后台进程会启动一个`CoarseGrainedExecutorBackend`，如下图
+
+![CoarseGrainedExecutorBackend后台进程](D:\ideaProject\bigdata\bigdata-spark\image\CoarseGrainedExecutorBackend后台进程.png)
+
+未来写`SQL`也会稍微快一些，因为它不像`Hive`，如果在`Hive`写`SQL`还复杂一点就会触发`MR`有**冷拉起的过程**。同样复杂的`SQL`，如果在以上方式写给`Spark`的话，它不需要冷拉起，因为`Executor`进程已经在运行。它只需要解然后发出去变成线程立刻就跑起来了，这就是两点差异。
+
+------
+
+### 二、为什么每家公司都要用大数据？
+
+首先并不是因为大数据好大家才用大数据。是因为现在的互联网模型每天会爆发大量的数据。有些公司每天的数据会有`10T`左右，其实一家公司可以不在乎这些数据，它也可以在乎这些数据。如果之前没有大数据的话，而且慢网络的时候没有这么大并发量没有这么多需要做用户个性化。给用户必须提供`7 x 24h`必须快速的那种服务的要求不是那么高的时候，这个事可以不用做，但是现在随随便便一个互联网的网红就可以有很大流量的年代，如果连用户的服务都做不到的话，可能公司其实离挂也不远了。所以此时企业说了，因为也有大数据了，这些都成熟了那么之前我可能只需要招团队去开发我的电商产品。那么现在我还要再招一个团队，一直盯着我这个开发团队开发这个电商它每时每秒的运行是不是都很健康，我整个公司的所有系统是不是都能为上下游提供一个稳定的运转，这就是大数据冰山一角可以做的事情。那么现在再来看企业是否需要这个环节，除非你真的就是特立独行。
+
+------
+
+### 三、`spark—sql.sh`
+
+`spark-shell`的`Hive`形式虽然很好，但是距离`SQL`还有点远，而且不能远程连接。所以`Spark`很贴心，除了有一个`spark—shell`还有一个**`spark—sql`**
+
+```shell
+# 切换到 spark 的 bin 目录下
+cd spark-2.3.4-bin-hadoop2.6/bin
+```
+
+如下图
+
+![spark—sql](D:\ideaProject\bigdata\bigdata-spark\image\spark—sql.png)
+
+#### 3.1————启动`spark-sql`
+
+```shell
+# 启动 spark-sql.sh
+./spark-sql --master yarn
+```
+
+`./spark-sql --master yarn`，如下图（**启动过程较长，共五个效果图**）
+
+![spark-sql1运行](D:\ideaProject\bigdata\bigdata-spark\image\spark-sql1.png)
+
+![spark-sql2](D:\ideaProject\bigdata\bigdata-spark\image\spark-sql2.png)
+
+![spark-sql3](D:\ideaProject\bigdata\bigdata-spark\image\spark-sql3.png)
+
+![spark-sql4](D:\ideaProject\bigdata\bigdata-spark\image\spark-sql4.png)
+
+![spark-sql5](D:\ideaProject\bigdata\bigdata-spark\image\spark-sql5.png)
+
+至此`spark-sql`启动成功。在`WebUI`同样有一个`SparkSQL`长连接，如下图
+
+![SparkSQL长连接](D:\ideaProject\bigdata\bigdata-spark\image\SparkSQL长连接.png)
+
+可以看出，**依然是`RUNNING`状态**。`SparkWebUI`的`SparkSQL`如下图
+
+![SparkUI的SparkSQL](D:\ideaProject\bigdata\bigdata-spark\image\SparkWebUI的SparkSQL.png)
+
+测试`spark-sql`，如下图
+
+![测试 spark-sql](D:\ideaProject\bigdata\bigdata-spark\image\测试spark-sql.png)
+
+在`spark-sql`中创建的表在`Hive`中也能查到，如下图
+
+![spark-sql建表](D:\ideaProject\bigdata\bigdata-spark\image\spark中创建表.png)
+
+![Hive 中查询 spark-sql 创建的表](D:\ideaProject\bigdata\bigdata-spark\image\在Hive中查看spark创建的表.png)
+
+所以，**`Spark`和`Hive`共享了一个`MetaStore`，所以建表的`DDL`语句只需要在一边创建即可，另一边可以享受。**
+
+那么能否启动一个类似`Hive`的`hiveserver2`并运行？可以在任何位置面向这个类似`hiveserver2`的服务发送`SQL`？并由这个服务跑`Spark`的程序。
+
+也就是说，能否先跑一个`Spark`程序，不在命令行接收`SQL`，而是要对外暴漏`JDBC`服务。让所有人，例如通过`beeline`的形式提交`SQL`语句。
+
+------
+
+### 四、`start-thriftserver.sh`———长服务
+
+#### 4.1————启动`Thrift JDBC`
+
+在`sbin`目录下。
+
+```shell
+# 切换到 spark/sbin
+cd spark-2.3.4-bin-hadoop2.6/sbin
+```
+
+因为**它一般倾向于伴随着集群启动**，会有一个`start-thriftserver.sh`如下图
+
+![start-thriftserver](D:\ideaProject\bigdata\bigdata-spark\image\start-thriftserver.png)
+
+启动`start-thriftserver.sh`，如下图
+
+```shell
+# 启动命令
+./start-thriftserver.sh --master yarn
+```
+
+![启动 start-thriftserver](D:\ideaProject\bigdata\bigdata-spark\image\start-thriftserver-SparkSubmit.png)
+
+可以看到启动过程很快，通过`jps`能发现启动了一个`SparkSubmit`的后台进程，在`HadoopUI`会看到一个`Thrift JDBC/ODBC Server`，如下图
+
+![HadoopUI Thrift JDBC](D:\ideaProject\bigdata\bigdata-spark\image\HadoopUI-Thrift-JDBC.png)
+
+它是一个运行分布式的对外提供`JDBC`连接服务。
+
+#### 4.2————启动`beeline`
+
+同理类似`Hive`的`beeline`，在`Spark`中也有`beeline`，如下图
+
+![Spark 中的 beeline](D:\ideaProject\bigdata\bigdata-spark\image\Spark中的beeline.png)
+
+运行`beeline`，如下图
+
+```shell
+cd spark-2.3.4-bin-hadoop2.6/bin
+./beeline
+```
+
+![运行 beeline](D:\ideaProject\bigdata\bigdata-spark\image\运行Spark中的beeline.png)
+
+可以直观感受到`beeline`的启动甚至比`Thrift JDBC`的启动过程还要快。
+
+##### 4.2.1—————`beeline`连接`hiveserver2`
+
+连接`hiveserver2`，如下图
+
+```hive
+!connect jdbc:hive2://hadoop03:10000
+```
+
+![连接 hiveserver2](D:\ideaProject\bigdata\bigdata-spark\image\spark中使用beeline连接hiveserver2.png)
+
+------
+
+### 五、思考
+
+如果你是一家公司的技术决策者或技术总监、架构师，你觉得公司这么多人扑上来，要用到你所有的关于`SQL`对数据的加工，你应该暴露哪种服务形式？
+
+是分发`Linux`系统的账户密码，让他们登录来执行`spark-shell、spark-sql`好，还是启动一个让他们从其他地方通过`JDBC`连过来执行好？
+
+答案是后者，而且他们俩互抄了，无论`Hive`还是`Spark-SQL`都希望暴露的是`server`。
+
+------
+
+## 章节 30：`Spark—SQL`，复杂`SQL`，函数，自定义函数，开窗`over`函数，`OLAP`
+
+------
+
+在写`SQL`时，基本都会用到函数，函数也是比较重要的一个概念。
+
+[`Spark`官网`SQL Documents`](https://archive.apache.org/dist/spark/docs/2.3.4/api/scala/index.html#org.apache.spark.sql.functions$)
+
+### 一、函数
+
+#### 1.1————使用场景
+
+有两类场景会使用函数
+
+- `OLTP`：多数为时间函数，日期函数，金额函数等等，偏向于事务性。
+- `OLAP`：趋向于分析性，复杂度会略高于`OLTP`，因为会涉及到对数据处理。
+
+#### 1.2————维度划分
+
+函数分为三个维度
+
+##### 1.2.1—————字符串函数
+
+包括、数值函数、金额函数、时间函数。
+
+##### 1.2.2—————数值加工函数
+
+聚合型函数、窗口函数（开窗函数）。
+
+##### 1.2.3—————`System or Custom Definition`函数
+
+系统会提供大量的函数。
 
