@@ -2,7 +2,7 @@
 
 ------
 
-## 章节 26：`Spark—SQL`，大数据中的`SQL`组成原理
+## 章节`26`：`Spark—SQL`，大数据中的`SQL`组成原理
 
 ------
 
@@ -106,7 +106,7 @@
 
 ------
 
-## 章节 27：`Spark—SQL`，`DataFram`到`Dataset`的开发
+## 章节`27`：`Spark—SQL`，`DataFram`到`Dataset`的开发
 
 ------
 
@@ -517,7 +517,7 @@ class Person extends Serializable {
 
 ------
 
-## 章节 28：`Spark—SQL`，整合`Hive`的`MetaStore`搭建企业级数仓——Ⅰ
+## 章节`28`：`Spark—SQL`，整合`Hive`的`MetaStore`搭建企业级数仓——Ⅰ
 
 ------
 
@@ -642,7 +642,7 @@ s.catalog.listTables().show() // 作用在 syndra 库
 
 ------
 
-## 章节 29：`Spark—SQL`，整合`Hive`的`MetaStore`搭建企业级数仓——Ⅱ
+## 章节`29`：`Spark—SQL`，整合`Hive`的`MetaStore`搭建企业级数仓——Ⅱ
 
 主要是如何贴近企业中实际去用，生产环境中不可能这么去用。要刻意注意，很多人学架构时会特别在意项目这件事。但如果学大数据的话，不要刻意把项目这个事放在心上。项目被弱化了，整个公司有一个大数据集群所有的数据都放入其中。由此衍生出中台的概念。
 
@@ -874,13 +874,15 @@ cd spark-2.3.4-bin-hadoop2.6/bin
 
 ------
 
-## 章节 30：`Spark—SQL`，复杂`SQL`，函数，自定义函数，开窗`over`函数，`OLAP`
+## 章节`30`：`Spark—SQL`，复杂`SQL`，函数，自定义函数，开窗`over`函数，`OLAP`
 
 ------
 
 在写`SQL`时，基本都会用到函数，函数也是比较重要的一个概念。
 
 [`Spark`官网`SQL Documents`](https://archive.apache.org/dist/spark/docs/2.3.4/api/scala/index.html#org.apache.spark.sql.functions$)
+
+------
 
 ### 一、函数
 
@@ -907,3 +909,117 @@ cd spark-2.3.4-bin-hadoop2.6/bin
 
 系统会提供大量的函数。
 
+------
+
+### 二、聚合
+
+如果要做聚合，那么首先要明白聚合它的前提要有组的概念。但是这个有组的概念必须要写`group by ?`吗？聚合函数必须要作用在`group by`上吗？
+
+非必须，首先`group by`默认整张表拿这个聚合函数作用在这个列的所有值上，如果写了`group by`只不过将这张表根据后面那个列的值分成若干组，每一组数据单拿出来作用在一个函数上。不管怎么样最终都是一组数据作用在一个函数身上，那么函数要对这一组数据进行处理。
+
+那么处理过程分为几个阶段，
+
+- 首先组中的**数据一条一条**组成，**一条为单位**进入，要进入我们的聚合操作。
+- 由于未来数据量不确定，所以会有`Buffer`的概念。一条记录后会有`schema`**识别数据**。而且`Buffer`前会有**初始化**的环节。
+- 然后进行**`merge`**的过程。
+- 最终**计算**。
+- `Buffer`也需要一个**`schema`**。
+- 输出的结果**返回类型`type`**。
+- 输出后放到**结果表**的某一列。
+
+#### 2.1————`UserDefinedAggregateFunction`
+
+聚合函数需要实现的方法
+
+```scala
+class MyAggFunc extends UserDefinedAggregateFunction {
+
+  override def inputSchema: StructType = ???
+
+  override def bufferSchema: StructType = ???
+
+  override def dataType: DataType = ???
+
+  override def deterministic: Boolean = ???
+
+  override def initialize(buffer: MutableAggregationBuffer): Unit = ???
+
+  override def update(buffer: MutableAggregationBuffer, input: Row): Unit = ???
+
+  override def merge(buffer1: MutableAggregationBuffer, buffer2: Row): Unit = ???
+
+  override def evaluate(buffer: Row): Any = ???
+}
+```
+
+根据需求业务自定义实现。
+
+------
+
+### 三、`OLAP`
+
+大数据主要做的就是`OLAP`。在分析时非常重要的一个就是开窗函数依赖`over`。`fun()`作用在`over()`，所谓`over()`其实就是分组。但这个分组它还和`group by`分组不一样，`group by`分组查询趋向于末端。开窗函数是趋向于查询完的那个结果集要再做一次分区的过程。
+
+一般`over()`中会有`over(partition, order)`这两个维度。`fun()`可以是聚合或非聚合。
+
+所谓开窗函数其实就是`over()`。
+
+#### 3.1————案例
+
+```scala
+// over
+s.sql("select *," +
+        " count(score) over(partition by class) as num " +
+        "from users")
+      .show()
+```
+
+```shell
+# SQL 执行结果
++----+-----+-----+---+
+|name|class|score|num|
++----+-----+-----+---+
+|   A|    1|   90|  3|
+|   B|    1|   90|  3|
+|   C|    1|   80|  3|
+|   A|    2|   50|  2|
+|   B|    2|   60|  2|
++----+-----+-----+---+
+```
+
+以上使用`over`，开窗函数其实虽然也会有`count`，但应该也是作用在`group by`上，但`count`如果作用在`over`身上，它其实是在为每一条记录补充汇总信息。
+
+例如`A`报了课程`1`考了`90`分，那么`1`类中一共有`3`条记录。`B`也报了一类，考了`90`分。如果单查，既能知道分数也能知道报了哪个科目还知道此科目中共有多少条其他记录。这就是一个最终明细表且有汇总信息。
+
+有时期望的是以上的表而不是以下的表，所以`SQL`语句没有对错只不过你把它用在什么地方。要灵活运用这才是`OLAP`。
+
+```scala
+// group by
+s.sql("select class, count(score) as num from users group by class").show()
+```
+
+```shell
+# SQL 执行结果
++-----+---+
+|class|num|
++-----+---+
+|    1|  3|
+|    2|  2|
++-----+---+
+```
+
+如果这么写，以上的`group by`中一直在强调有个约束，结果表`group by`那组就只剩下一条记录了。`1`类学科中有三笔记录，`2`类学科中有两笔记录，前边所有信息都丢了，但是其实有时需要的是为每一个人补充他如果报了`1`类科目那么他所在的`1`类科目中一共有多少条记录？每一个人都要出现他所报的科目以及这个科目多少条记录，并为每个人补充这个数值。要把它分开贴上去而不是说最终做一个聚合这么一个结果。聚合这个结果可能没有意义你是要为每个人补充这么一个汇总信息。
+
+所以如此看出`group by`最终做的是聚合汇总。
+
+------
+
+### 四、`OLTP`
+
+无非就是`CRUD`等等那些`select`的过程。无非就是疯狂的在外面变条件，连分组`join`其实都应该去避免。如果真的要发生分组，这个分组或者`join`都要做一些预计算。比如视图，用视图方式来加速试图雾化。
+
+比如在商品详情页，把数据都放入`Redis`，这样才能更快从而应对高并发。后续那些高并发的东西虽然它有很多机器去负载，但是某一台机器如果卡住了一个查询，后续那些就阻塞住了。
+
+------
+
+# 后续`Spark—SQL`源码分析详见`Spark—SQL_源码.md`

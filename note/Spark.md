@@ -2,7 +2,7 @@
 
 ------
 
-## 章节5 : Spark-CORE，复习 Hadoop 生态，梳理术语， HadoopRDD 源码解析
+## 章节`5`：Spark-CORE，复习 Hadoop 生态，梳理术语， HadoopRDD 源码解析
 
 已经执行的任务 RDD，如果别的任务有服用则直接使用
 
@@ -1165,7 +1165,7 @@ override def getDependencies: Seq[Dependency[_]] = {
 
 ------
 
-## 章节6 : Spark-CORE，wordcount 案例源码分析，图解
+## 章节`6`：Spark-CORE，wordcount 案例源码分析，图解
 
 **图解详见 Idea 工程中 image 目录。**
 
@@ -1173,7 +1173,7 @@ override def getDependencies: Seq[Dependency[_]] = {
 
 
 
-## 章节7：Spark-CORE，集合操作 API，pvuv 分析，RDD 源码分析
+## 章节`7`：Spark-CORE，集合操作 API，pvuv 分析，RDD 源码分析
 
 **1.Spark_RDD_API_Example**
 
@@ -1697,7 +1697,7 @@ Idea 运行结果：
 
 ------
 
-## 章节8：Spark-CORE，聚合计算 API，combineByKey()，分区调优
+## 章节`8`：Spark-CORE，聚合计算 API，combineByKey()，分区调优
 
 **1.Spark RDD Aggregator Compute**
 
@@ -2101,7 +2101,7 @@ def repartition(numPartitions: Int)(implicit ord: Ordering[T] = null): RDD[T] = 
 
 ------
 
-## 章节9：Spark-CORE，二次排序，分组取TopN，算子综合应用
+## 章节`9`：Spark-CORE，二次排序，分组取TopN，算子综合应用
 
 ```scala
 package com.syndra.bigdfata.Lesson08_Other
