@@ -113,13 +113,28 @@ object Lesson06_SQL_Functions {
 
     // V1
     /*
-    s.sql("select name,   " +
-        " sum(score) " +
-        "from users " +
-        "group by name " +
-        "order by name desc")
-      .show()*/
-  }
+    val res: DataFrame = s.sql("select name,   " +
+      " sum(score) " +
+      "from users " +
+      "group by name " +
+      "order by name desc")
+
+    res.show()
+    println("——————————")
+    res.explain(true)*/
+
+    /*
+    val res: DataFrame = s.sql("select ta.name, ta.class, tb.score " +
+      "from " +
+      "(select name, class from users) as ta " +
+      "join" +
+      "(select name, score from users) as tb " +
+      "on ta.name = tb.name " +
+      "where tb.score > 60")
+    res.show()
+    println("——————————")
+    res.explain(true)
+  }*/
 }
 
 /**
