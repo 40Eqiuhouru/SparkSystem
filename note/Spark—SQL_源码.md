@@ -120,3 +120,232 @@ def build(): SessionState = {
 
 ------
 
+### 前言
+
+上一个章节其实**不包含`ANTLRV4`语法解析**，直接分析了后续的通过`API`，每个`DataFrame`其实就包含了一个逻辑执行计划。这个计划是一棵树且要翻转。
+
+本章先分析收到一个字符串，它是怎么完成这棵树的演变过程的？
+
+进入`SQL`解析的途径有很多种。上一章分析的是`API`级，本章分析`SQL`级。他人传入`SQL`字符串后我们如何处理？
+
+在`SQL`解析过程中有很多技术可以实现，那么目前的`2.x`之前的版本中，使用了`ANTLRV4`技术。一般很多技术都会拿它来做这种解析或是编译及语法解析的过程。
+
+------
+
+### 一、`ANTLRV4`
+
+首先要创建一个**`.g4`为扩展名的文件**。为什么要先得到这个文件？
+
+整体上来说，比如`Java`或`C`语言，其实都还有写数据库写`SQL`。其实这三个有点相似，因为我们都是作为人去写出一些字符串，但是这些字符串它就是字符串，它不能执行也不能有一些真正的逻辑在其中。那么最终它是怎么能执行起来的？
+
+`SQL`怎么变成程序，`Java`怎么变成字节码，然后`SQL`怎么变成底层的一个数据库的查询？
+
+它中间加了一个环节，就是编译我们写的字符串，这其中有两个词
+
+- 字符串文本
+- 编译
+
+那么这个文本交给一个编译时，其实这其中有一个东西叫做语法。不能乱写否则编译器无法识别。可以**开发一个程序**，也可以不用开发这个程序像一个工厂一样，它**读取一个配置文件**，或者叫一个语法文件。得到规则，**其实就是把文法语法和解析器程序分开了**。
+
+分词和语法可以分开写也可以写在一个文件中。
+
+#### 1.1————简单的示例
+
+```sql
+// grammar 后的名字必须与文件名相同
+grammar test;
+
+tsinit : '{' value (',' value)* '}';
+
+value : INT
+      | tsinit;
+
+// 可以是 0-9的一个或多个数字
+INT : [0-9]+;
+// 忽略一个或多个空白字符
+WS : [ \t\r\n]+ -> skip;
+```
+
+效果如下图
+
+![语法树简单示例](D:\ideaProject\bigdata\bigdata-spark\image\语法树简单示例.png)
+
+`Spark—SQL`的默认解析文件`D:\ideaProject\sourcecodelearn\spark-2.3.4\sql\catalyst\src\main\antlr4\org\apache\spark\sql\catalyst\parser\SqlBase.g4`，用户先要学习语法，语法其实也是最终生成解析器的东西。这么做的目的其实是为了解耦。
+
+可以通过`ANTLRV4`生成对应的文法此法的类。
+
+#### 1.2————`SparkSession`的`def sql`
+
+进入`parsePlan()`中
+
+```scala
+/**
+ * Executes a SQL query using Spark, returning the result as a `DataFrame`.
+ * The dialect that is used for SQL parsing can be configured with 'spark.sql.dialect'.
+ *
+ * @since 2.0.0
+ */
+def sql(sqlText: String): DataFrame = {
+  Dataset.ofRows(self, sessionState.sqlParser.parsePlan(sqlText))
+}
+```
+
+最终会追到`ParseDriver.scala`
+
+```scala
+/** Creates LogicalPlan for a given SQL string. */
+override def parsePlan(sqlText: String): LogicalPlan = parse(sqlText) { parser =>
+  astBuilder.visitSingleStatement(parser.singleStatement()) match {
+    case plan: LogicalPlan => plan
+    case _ =>
+      val position = Origin(None, None)
+      throw new ParseException(Option(sqlText), "Unsupported SQL statement", position, position)
+  }
+}
+
+protected def parse[T](command: String)(toResult: SqlBaseParser => T): T = {
+  logDebug(s"Parsing command: $command")
+
+  val lexer = new SqlBaseLexer(new UpperCaseCharStream(CharStreams.fromString(command)))
+  lexer.removeErrorListeners()
+  lexer.addErrorListener(ParseErrorListener)
+
+  val tokenStream = new CommonTokenStream(lexer)
+  val parser = new SqlBaseParser(tokenStream)
+  parser.addParseListener(PostProcessor)
+  parser.removeErrorListeners()
+  parser.addErrorListener(ParseErrorListener)
+  
+  try {
+    try {
+      // first, try parsing with potentially faster SLL mode
+      parser.getInterpreter.setPredictionMode(PredictionMode.SLL)
+      toResult(parser)
+    }
+    catch {
+      case e: ParseCancellationException =>
+      // if we fail, parse with LL mode
+      tokenStream.seek(0) // rewind input stream
+      parser.reset()
+
+      // Try Again.
+      parser.getInterpreter.setPredictionMode(PredictionMode.LL)
+      toResult(parser)
+    }
+  }
+  catch {
+    case e: ParseException if e.command.isDefined =>
+      throw e
+    case e: ParseException =>
+      throw e.withCommand(command)
+    case e: AnalysisException =>
+      val position = Origin(e.line, e.startPosition)
+      throw new ParseException(Option(command), e.message, position, position)
+  }
+}
+```
+
+`parsePlan`是一个柯里化方法，其中`parse(sqlText)`会传递来字符串，并由`parse`进行`lexer`→`tokenStream`→`parser`的解析过程。然后通过`toResult`提交结果到柯里化的函数。并且`singleStatement`就是`D:\ideaProject\sourcecodelearn\spark-2.3.4\sql\catalyst\src\main\antlr4\org\apache\spark\sql\catalyst\parser\SqlBase.g4`中的第`43`行。
+
+------
+
+### 二、`Analyzed`
+
+如果得到了一颗文法树都是一些字符串，这其中字符串最后不能说对着一个`table1`的三个字母就能查出数据来，`table1`这种有元数据关联规则的。可以根据规则去拿字面的`table1`最重要取出它元数据的东西也就是真正的那个位置是读哪个文件还是读什么地方的数据才能把数据加载出来，这是要绑定一次元数据的过程。也就是图当中它的下一步`analyzed`是要和元数据去绑定的，而且要条件反射`Spark`的元数据，它其实自己维护了一个`cataLog`。
+
+`cataLog`中维护一些基于`Memory`的这种临时`Application`级别的创建一些`tempView`，然后也可以来自于一个`internal`外部的一些，比如`Hive`中的元数据。都可以在这个环节中去绑定刚才的生成`SQL`那个字符串的树去做一次绑定和扩充。
+
+那么如何去做？还是回到`SparkSession`。进入`ofRows()`
+
+```scala
+def sql(sqlText: String): DataFrame = {
+  Dataset.ofRows(self, sessionState.sqlParser.parsePlan(sqlText))
+}
+```
+
+可以看到
+
+```scala
+def ofRows(sparkSession: SparkSession, logicalPlan: LogicalPlan): DataFrame = {
+  val qe = sparkSession.sessionState.executePlan(logicalPlan)
+  qe.assertAnalyzed()
+  new Dataset[Row](sparkSession, qe, RowEncoder(qe.analyzed.schema))
+}
+```
+
+进入`assertAnalyzed()`，会发现
+
+```scala
+def assertAnalyzed(): Unit = analyzed
+```
+
+此方法并不是懒执行的，间接调了`analyzed`
+
+```scala
+lazy val analyzed: LogicalPlan = {
+  SparkSession.setActiveSession(sparkSession)
+  // 依旧是通过 sessionState 检查逻辑计划
+  sparkSession.sessionState.analyzer.executeAndCheck(logical)
+}
+```
+
+在得到`QueryExecution`后，第一步就是解析且每个`Dataset`都会完成这一步。但是剩下的要在`Action`算子触发时才会被执行。
+
+最终一定会得到`executedPlan.execute()`时才会逆推向上执行。但是`Analyzed`一定是优先被执行。
+
+进入`executeAndCheck(logical)`会发现在`Analyzer.scala`类中继承了`RuleExecutor`定义了很多规则。`Analyzer`中有`cataLog`会有元数据。`Plan`→`Analyzer`→`RuleExecutor`其中会有很多规则，这些规则在遍历的时候会作用在`Plan`上，`batches`就是遍历规则。
+
+```scala
+def apply(plan: LogicalPlan): LogicalPlan = plan.transformUp {
+  case i @ InsertIntoTable(u: UnresolvedRelation, parts, child, _, _) if child.resolved =>
+    EliminateSubqueryAliases(lookupTableFromCatalog(u)) match {
+      case v: View =>
+        u.failAnalysis(s"Inserting into a view is not allowed. View: ${v.desc.identifier}.")
+      case other => i.copy(table = other)
+    }
+  case u: UnresolvedRelation => resolveRelation(u)
+}
+```
+
+一种方式为`UnresolvedRelation => resolveRelation(u)`转换过程，可以缔造出一个`Dataset`。
+
+```scala
+def resolveRelation(plan: LogicalPlan): LogicalPlan = plan match {
+  // 如果还有和元数据做关联
+  case u: UnresolvedRelation if !isRunningDirectlyOnFiles(u.tableIdentifier) =>
+    val defaultDatabase = AnalysisContext.get.defaultDatabase
+    // 寻找关系, table1 在什么位置
+    // 最终就是找 lookupTableFromCatalog(u, defaultDatabase)
+    val foundRelation = lookupTableFromCatalog(u, defaultDatabase)
+    resolveRelation(foundRelation)
+    // The view's child should be a logical plan parsed from the `desc.viewText`, the variable
+    // `viewText` should be defined, or else we throw an error on the generation of the View
+    // operator.
+    case view @ View(desc, _, child) if !child.resolved =>
+      // Resolve all the UnresolvedRelations and Views in the child.
+      val newChild = AnalysisContext.withAnalysisContext(desc.viewDefaultDatabase) {
+        if (AnalysisContext.get.nestedViewDepth > conf.maxNestedViewDepth) {
+          view.failAnalysis(s"The depth of view ${view.desc.identifier} exceeds the maximum " +
+            s"view resolution depth (${conf.maxNestedViewDepth}). Analysis is aborted to " +
+            s"avoid errors. Increase the value of ${SQLConf.MAX_NESTED_VIEW_DEPTH.key} to work " +
+            "around this.")
+        }
+        executeSameContext(child)
+      }
+      view.copy(child = newChild)
+    case p @ SubqueryAlias(_, view: View) =>
+      val newChild = resolveRelation(view)
+      p.copy(child = newChild)
+    case _ => plan
+}
+```
+
+**最终可以看出`Analyzed`就是在做元数据的绑定的过程。**
+
+在开启`SparkonHive`后，其实就可以`s.sql()`写`SQL`，没有一个所谓的注册表的过程。所以这两个过程当中就是符合刚才代码中在查找元数据时
+
+- 本地有了，就取本地的。
+- 本地没有，就取外部的元数据，然后查询取回并做一次绑定。
+
+------
+

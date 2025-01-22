@@ -154,7 +154,7 @@ package object sql {
 ### 一、感受`Spark—SQL`
 
 ```scala
-package com.syndra.bigdfata.sql
+package com.syndra.bigdata.sql
 
 import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.sql.{DataFrame, SparkSession}
@@ -195,7 +195,7 @@ object Lesson01_SQL_Basic {
 ### 二、`cataLog`基本语法
 
 ```scala
-package com.syndra.bigdfata.sql
+package com.syndra.bigdata.sql
 
 import org.apache.spark.sql.catalog.{Database, Function, Table}
 import org.apache.spark.sql.{DataFrame, Dataset, SparkSession}
@@ -266,7 +266,7 @@ object Lesson01_SQL_Basic {
 基于`JSON`格式的`SQL`
 
 ```scala
-package com.syndra.bigdfata.sql
+package com.syndra.bigdata.sql
 
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.types.{DataTypes, StructField, StructType}
@@ -313,7 +313,7 @@ object Lesson02_SQL_API01 {
 - **第一种方式：`RDD[Row] + StructType`**
 
   ```scala
-  package com.syndra.bigdfata.sql
+  package com.syndra.bigdata.sql
   
   import org.apache.spark.rdd.RDD
   import org.apache.spark.sql.types.{DataTypes, StructField, StructType}
@@ -384,7 +384,7 @@ object Lesson02_SQL_API01 {
 - **第二种方式：`RDD[bean] + javabean`**
 
   ```scala
-  package com.syndra.bigdfata.sql
+  package com.syndra.bigdata.sql
   
   import org.apache.spark.rdd.RDD
   import org.apache.spark.sql.{DataFrame, Dataset, SparkSession}
@@ -452,7 +452,7 @@ object Lesson02_SQL_API01 {
 `Dataset`强的地方在于，它其中过滤数据有识别，反序列化，优化序列化。它需要编码器能够明确的而且编码器最好是可以对未来的数据能做到寻址。优化虚拟化使用方式尽量数据在内存中不成为对象，因为给出一个合适的编码器就可以让数据一直在内存中变成字节数组。在分析源码时也知道数据在内存中是对象还是字节数组他们成本开销是不一样的，而且如果变成数组的话还可以充分利用它的钨斯计划。要么放在堆中变成字节数组，要么放在堆外变成字节数组。
 
 ```scala
-package com.syndra.bigdfata.sql
+package com.syndra.bigdata.sql
 
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{DataFrame, Dataset, Encoders, SparkSession}
