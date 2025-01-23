@@ -245,7 +245,18 @@ protected def parse[T](command: String)(toResult: SqlBaseParser => T): T = {
 }
 ```
 
-`parsePlan`是一个柯里化方法，其中`parse(sqlText)`会传递来字符串，并由`parse`进行`lexer`→`tokenStream`→`parser`的解析过程。然后通过`toResult`提交结果到柯里化的函数。并且`singleStatement`就是`D:\ideaProject\sourcecodelearn\spark-2.3.4\sql\catalyst\src\main\antlr4\org\apache\spark\sql\catalyst\parser\SqlBase.g4`中的第`43`行。
+```mermaid
+graph TB
+	A(parsePlan柯里化) --> |传递字符串sqlText| B(parse);
+	A(parsePlan柯里化) --> C(柯里化函数);
+	B(parse) --> D(lexer);
+	D(lexer) --> E(tokenStream);
+	E(tokenStream) --> F(parser);
+	F(parser) --> G(toResult);
+	G(toResult) --> C(柯里化函数);
+```
+
+并且`singleStatement`就是`D:\ideaProject\sourcecodelearn\spark-2.3.4\sql\catalyst\src\main\antlr4\org\apache\spark\sql\catalyst\parser\SqlBase.g4`中的第`43`行。
 
 ------
 
@@ -293,7 +304,18 @@ lazy val analyzed: LogicalPlan = {
 
 最终一定会得到`executedPlan.execute()`时才会逆推向上执行。但是`Analyzed`一定是优先被执行。
 
-进入`executeAndCheck(logical)`会发现在`Analyzer.scala`类中继承了`RuleExecutor`定义了很多规则。`Analyzer`中有`cataLog`会有元数据。`Plan`→`Analyzer`→`RuleExecutor`其中会有很多规则，这些规则在遍历的时候会作用在`Plan`上，`batches`就是遍历规则。
+进入`executeAndCheck(logical)`会发现在`Analyzer.scala`类中继承了`RuleExecutor`定义了很多规则。`Analyzer`中有`cataLog`会有元数据。
+
+```mermaid
+flowchart LR
+    A(Plan) --> B(Analyzer);
+    B(Analyzer) --> C(RuleExecutor);
+    style A fill:#E76965;
+    style B fill:#D44D4B;
+    style C fill:#4D5CD6;
+```
+
+其中会有很多规则，这些规则在遍历的时候会作用在`Plan`上，`batches`就是遍历规则。
 
 ```scala
 def apply(plan: LogicalPlan): LogicalPlan = plan.transformUp {
@@ -349,3 +371,301 @@ def resolveRelation(plan: LogicalPlan): LogicalPlan = plan match {
 
 ------
 
+### 三、总结
+
+在平时开发时，我们用什么？
+
+第一种是用写字符串的方式，也就是`SparkSession`。然后调用它的`sql()`，可以传递给它一个简单的也可以是复杂的`SQL`语句。此时要注意，调用后先转变成一个所谓的逻辑计划，换言之这个计划可以是一颗简单的树也可以是一颗复杂的树。
+
+这其中有两个概念，一个是`Dataset`一个是`Plan`，这两个维度。这是一个写`SQL`的方式。
+
+第二种方式是我们可以通过`Dataset API`，如果得到了一个`Dataset`可以在上面调用一系列的诸如`.filter()`等方法。`Dataset`它是我们编程人员的一个对象，但此时如果再进一步思考
+
+```mermaid
+graph LR;
+	DataSource(Dataset <br> object <br> src tab a) --> |where| B(Dataset) --> |where| C(Dataset);
+	DataSource(Dataset <br> object <br> src tab a) --> |where| D(Dataset);
+```
+
+后续的所有操作面向`Plan`。
+
+```mermaid
+graph TB
+	subgraph Dataset
+	style Dataset fill:#9BCD9B
+		subgraph Plan
+			P1 --> P2
+			P2 --> P3
+			style Plan fill:#6A5ACD
+		end
+	end
+```
+
+最终衔接的并不是`Dataset`而是`Plan`逻辑计划。
+
+------
+
+## 章节`33`：`Spark—SQL`源码，逻辑计划，优化器，物理计划，转换`RDD`
+
+------
+
+### 一、`Analyzer`的过程
+
+```mermaid
+graph TB
+	RuleExecutor --> Method(def executor_plan: TreeType)
+	style RuleExecutor fill:#6CA6CD
+	style Method fill:#FFF68F
+	RuleExecutor --> Analyzer
+	style Analyzer fill:#CD5C5C
+	Analyzer --> Seq(lazy val batches: Seq_Batch)
+	style Seq fill:#BBFFFF
+	Logical --> Analyzer
+	style Logical fill:#9370DB
+```
+
+详细过程在`Spark—SQL@图解.pos`。
+
+这就是`Analyzer`的过程，这样树就可以由文本字符串树转成包含元数据信息的树。至此，在转换完成后所有的`Dataset`准备完毕。
+
+以上阶段在**提交`SQL`得到`DF/DS`、`API`得到`DF/DS`时间点触发。**
+
+后一个阶段在**`withAction`时间点触发**。
+
+### 1.1————优化器要做的事
+
+```mermaid
+flowchart TB
+	SQL(select a, b, c from _select * from user) --> p0(project a, b, c)
+	p0 --> p1(project * a, b, c, d, e, f)
+	p1 --> p1_1(prokect * a, b, c)
+	
+	p1 --> file
+	p1_1 --> file
+	
+	p1 --> Opter(optimizer ColumnPruning:rule)
+	style Opter fill:#EEE8AA
+	Opter --> p1_1
+```
+
+以上即为优化器的任务。
+
+------
+
+### 二、`withAction`阶段
+
+```mermaid
+flowchart LR
+	Analyzer --> optimizer
+	style Analyzer fill:#CD5C5C
+	style optimizer fill:#EE82EE
+	
+	optimizer --> SparkOptimizer
+	optimizer --> Method(def batches: Seq_Batch)
+	optimizer --> planner
+	
+	SparkOptimizer --> Method_1(override def batches)
+	Method_1 --> Method
+```
+
+也就是说，宏观过程为
+
+```mermaid
+flowchart LR
+	A(TREE_明文字符串) --> B(TREE_绑定了元数据) --> C(TREE_优化的) --> D(TREE_物理的可执行)
+	style A fill:#AB82FF
+	style B fill:#9F79EE
+	style C fill:#8968CD
+	style D fill:#5D478B
+```
+
+其实说白了就是从字符串文本带一个转变过程。以上为分析`withAction`算子的第一个柯里化也就是`qe`。
+
+```scala
+/**
+ * Returns the first `n` rows.
+ *
+ * @note this method should only be used if the resulting array is expected to be small, as
+ * all the data is loaded into the driver's memory.
+ *
+ * @group action
+ * @since 1.6.0
+ */
+def head(n: Int): Array[T] = withAction("head", limit(n).queryExecution)(collectFromPlan)
+
+/**
+ * Wrap a Dataset action to track the QueryExecution and time cost, then report to the
+ * user-registered callback functions.
+ */
+private def withAction[U](name: String, qe: QueryExecution)(action: SparkPlan => U) = {
+  try {
+    qe.executedPlan.foreach { plan =>
+      plan.resetMetrics()
+    }
+    val start = System.nanoTime()
+    val result = SQLExecution.withNewExecutionId(sparkSession, qe) {
+      action(qe.executedPlan)
+    }
+    val end = System.nanoTime()
+    sparkSession.listenerManager.onSuccess(name, qe, end - start)
+    result
+  } catch {
+    case e: Exception =>
+      sparkSession.listenerManager.onFailure(name, qe, e)
+      throw e
+  }
+}
+```
+
+`qe`触发了一个`executedPlan`。
+
+------
+
+### 三、转换的过程
+
+逻辑计划中的`Filter`很小，并没有太多东西。
+
+```scala
+case class Filter(condition: Expression, child: LogicalPlan)
+  extends UnaryNode with PredicateHelper {
+  override def output: Seq[Attribute] = child.output
+
+  override def maxRows: Option[Long] = child.maxRows
+
+  override protected def validConstraints: Set[Expression] = {
+    val predicates = splitConjunctivePredicates(condition)
+      .filterNot(SubqueryExpression.hasCorrelatedSubquery)
+    child.constraints.union(predicates.toSet)
+  }
+}
+```
+
+如果一旦调用了`QueryExecution`最后的`executedPlan`，是需要先通过一个`Plan`对我们刚才转换完那个优化的树做一个处理。
+
+```mermaid
+%%{ init: { 'graph': { 'curve': 'natural' } } }%%
+flowchart TB
+	Root(SparkPlan) --> LNode(LeafExecNode)
+	style Root fill:#0000FF
+	style LNode fill:#6495ED
+	Root --> MNode(UnaryExecNode)
+	style MNode fill:#6495ED
+	Root --> RNode(BinaryExecNode)
+	style RNode fill:#6495ED
+	
+	Root --> Execute(final def execute)
+	style Execute fill:#FFF68F
+	
+	MNode --> filter(FilterExec)
+	style filter fill:#1E90FF
+	filter --> do(doExecutor)
+	style do fill:#4169E1
+	
+	Execute -.-> do
+```
+
+结合图解，即为整个`SQL`执行解析的过程。
+
+------
+
+### 四、什么是或者什么叫执行？
+
+```mermaid
+%%{ init: { 'graph': { 'curve': 'natural' } } }%%
+graph TB
+	collectFromPlan -.-> def_doExecute_RDD
+	style collectFromPlan fill:#1E90FF
+
+	subgraph BasicOperators_plan
+	style BasicOperators_plan fill:#6495ED
+	c(case logical.Filter_condition, child_ =>) --> e(execution.FilterExec_condition, planLater_child__)
+	style c fill:#836FFF
+	style e fill:#836FFF
+		subgraph case_class_FilterExec
+		style case_class_FilterExec fill:#7FFFD4
+			subgraph def_doExecute_RDD
+			style def_doExecute_RDD fill:#FFC1C1
+			Text(child.execute，从结果到源的逆推过程 <br> mapPartitionsWithIndexInternal回归过程拼接RDD，并嵌入算子)
+			end
+    end
+	end
+```
+
+以上流程会和`Spark—CORE`的`RDD`重叠
+
+```mermaid
+graph LR
+	A(源：hivetable <br> HadoopRDD.compute__) --> B(转换：Filter)
+	B --> C(Spark—SQL<br> Optimizer <br> Driver 想优化 Shuffle <br> 如果数据源是parquet还能减少读取数据的IO)
+	C  --> D(执行：<br> byteArrayRdd.collect__)
+	D --> E(DAG <br> Driver <br> 优化：<br> 如果上下游的RDD打分区器和分区数一样，<br> 那么即便他们之间调用了Shuffle算子，<br> 也屏蔽这次Shuffle)
+	
+	C --> F(因为Spark是一个离线计算框架，<br> Shuffle一定会触发磁盘IO和网络IO <br> 又因为：IO是计算机的瓶颈) 
+	E --> F
+	
+	G(Dataset <br> encoding <br> 编码器 <br> 序列化的优化 <br> unsafe：钨丝计划 <br> 如果数据在节点间不需要频繁的序列化反序列化) --> F
+	G --> H{{CPU算力}}
+	G --> I(内存空间的节省)
+```
+
+这个流程是基石。
+
+现在所有的计算机系统和软件都没有逃离计算机组成原理和冯诺依曼体系。
+
+------
+
+### 五、总结
+
+至此，分析即是
+
+```mermaid
+graph LR
+	A{{词法 <br> 语法分析 <br> Parser <br> token}} --> B(AST <br> Node)
+	style A fill:#DA70D6
+	style B fill:#CD5555
+	A --> C(ANTLRV4)
+	style C fill:#FF0000
+	
+	B --> D{Analyzed}
+	style D fill:#CD5555
+	D --> E([MetaStore])
+	style E fill:#CD8500
+	E --> F[select a from test]
+	F --> F_1[df.createTempView_test_]
+	style F_1 fill:#7AC5CD
+	F --> F_2[s.enableSupportHive__ <br> s.sql]
+	style F_2 fill:#7AC5CD
+	
+	D --> G{optimizedPlan}
+	style G fill:#CD5555
+	G --> G_1[成本：Hive <br> 规则：Spark]
+	style G_1 fill:#2F4F4F
+	
+	G --> H{physicalPlan}
+	style H fill:#CD5555
+	I[object <br> Dataset] --> J[Logical]
+	style I fill:#32CD32
+	style J fill:#0000CD
+	J --> H
+	
+	H --> K
+	K{RDD优化} --> K_1[DAGScheduler]
+	style K fill:#CD5555
+	style K_1 fill:#5D478B
+	
+	A_1[object] --> A_1_1[sql其实是字符串]
+	style A_1 fill:#32CD32
+	style A_1_1 fill:#228B22
+	A_1_1 --> A
+	
+	A --> A_2([写SQL的方式])
+	style A_2 fill:#FFF68F
+	A_2 --> A_2_1[spark-shell.sh <br> spark-sql.sh <br> thriftserver+beeline jdbc]
+	style A_2_1 fill:#C0FF3E
+```
+
+以上宏观的流程。
+
+------
+
+# 后续`Spark—Streaming`分析与学习详见`Spark—Streaming.md`。
