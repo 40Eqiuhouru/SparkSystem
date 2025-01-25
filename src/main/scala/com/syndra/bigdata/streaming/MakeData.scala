@@ -20,6 +20,9 @@ object MakeData {
             while (client.isConnected) {
               num += 1
               printer.println(s"hello ${num}")
+              // 扩展
+              printer.println(s"hi ${num}")
+              printer.println(s"hi ${num}")
               Thread.sleep(1000)
             }
           }

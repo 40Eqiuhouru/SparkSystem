@@ -251,3 +251,188 @@ object Lesson01_Receiver01 {
 
 ------
 
+### 一、一个`batch`一个`Job`，孤立
+
+`Spark`在`2.3.x`中预先告知`1ms`级的纯流式计算。
+
+```scala
+package com.syndra.bigdata.streaming
+
+import org.apache.spark.streaming.dstream.{DStream, ReceiverInputDStream}
+import org.apache.spark.streaming.{Duration, StreamingContext}
+import org.apache.spark.{SparkConf, SparkContext}
+
+/**
+ * DStream API
+ */
+object Lesson03_DStream_API {
+  def main(args: Array[String]): Unit = {
+    val conf: SparkConf = new SparkConf().setAppName("TEST_DStream_API").setMaster("local[8]")
+    val sc: SparkContext = new SparkContext(conf)
+    sc.setLogLevel("ERROR")
+    /*
+    * Spark Streaming 100ms batch 1ms
+    * Low Level API
+    * */
+    val scc: StreamingContext = new StreamingContext(sc, Duration(1000))
+
+    /*
+    * 1.需求 : 将计算延缓
+    * 2.一个数据源, 要保证 1m 级的数据频率和 5m 级的输出频率
+    * 3.而且, 是在数据输出的时候计算输出时间点的历史数据
+    *
+    * 数据源是 1s 中一个 hello 2个 hi
+    * */
+
+    // 数据源的粗粒度 : 1s 来自于 StreamContext
+    val resource: ReceiverInputDStream[String] = scc.socketTextStream("localhost", 8889)
+
+    val format: DStream[(String, Int)] = resource.map(_.split(" ")).map(x => (x(0), x(1).toInt))
+    val res1s1Batch: DStream[(String, Int)] = format.reduceByKey(_ + _)
+    res1s1Batch.mapPartitions(iter => {
+      println("1s");
+      iter
+    }).print() /* 打印频率 : 1s 打印 1次 */
+
+    // 5s 窗口
+    val newDS: DStream[(String, Int)] = format.window(Duration(5000))
+
+    // 5个 batch
+    val res5s5Batch: DStream[(String, Int)] = newDS.reduceByKey(_ + _)
+    res5s5Batch.mapPartitions(iter => {
+      println("5s");
+      iter
+    }).print() /* 打印频率 : 5s 打印 1次...1s 打印 1次 */
+
+    scc.start()
+    scc.awaitTermination()
+  }
+}
+```
+
+可以让窗口`window`更加细粒度
+
+```scala
+val newDS: DStream[(String, Int)] = format.window(Duration(5000), Duration(5000))
+```
+
+- 第一个参数表示窗口大小
+- 第二个参数表示滑动距离
+
+这两个参数会有多种组合方式
+
+```mermaid
+graph LR
+	win[window机制中_时间定义大小 <br> 1.窗口大小：计算量，取多少batch <br> 2.步进，滑动距离：Job启动间隔] 
+	-->
+  A[window_5s, 2s_每隔2s取出历史5s的数据计算<br>window_5s, 5s_每隔5s取出历史5s的数据计算<br>window_5s, 10s_每隔10s取出历史5s的数据计算]
+```
+
+根据业务而定。而且窗口的粒度取决于`StreamingContext()`最好是为倍数关系。
+
+#### 1.1————`window`的粒度
+
+假设**每秒中看到历史 5s 的统计**，以下的`reduce, res`会存在问题
+
+```scala
+val reduce: DStream[(String, Int)] = format.reduceByKey(_ + _) // 窗口是 1000, Slide 是 1000
+val res: DStream[(String, Int)] = reduce.window(Duration(5000))
+
+val win: DStream[(String, Int)] = format.window(Duration(5000)) // 先调整量
+val res1: DStream[(String, Int)] = win.reduceByKey(_ + _) // 在基于上一步的量上整体发生计算
+```
+
+其实一直有窗口的概念，`window`的粒度默认取决于`StreamingContext()`的默认设置
+
+```scala
+// 最小粒度 约等于 : win大小为 1000, slide 滑动距离也是 1000
+val scc: StreamingContext = new StreamingContext(sc, Duration(1000))
+```
+
+`Spark`也是非常贴心的基于此的`API → reduceByKeyAndWindow()`
+
+```scala
+val res: DStream[(String, Int)] = format.reduceByKeyAndWindow(_ + _, Duration(5000))
+```
+
+------
+
+### 二、转换
+
+一共两种途径
+
+#### 2.1————第一种`transform`
+
+中途加工`RDD`
+
+```scala
+// 1.transform : 先转换成 RDD, 然后再进行操作
+val res: DStream[(String, Int)] = format.transform( // 硬性要求 : 返回值是 RDD
+  rdd => {
+    rdd.foreach(println) // 产生 Job
+    val rddRes: RDD[(String, Int)] = rdd.map(x => (x._1, x._2 * 10)) // 只是在转换
+    rddRes
+  }
+)
+```
+
+把`RDD`传给了一个函数，我们只需要写出这个函数即可。
+
+其实`transform`中它也能拿到`RDD`，他是要求你必须最后还返回`RDD`，那么也就代表着这其中你可以写`Action`，也可以不写。但是无论如何最后这个函数还得返回`RDD`，换而言之，可以你给我一个`RDD`，我可以令这个`RDD`进行`foreach`打印其中的内容，但是除了要打印的话。最终还拿这个`RDD`去做一个转换，然后再输出返回转换完的`RDD`再输出出去。输出回去后得到了一个`format.transform`。等于其中有几个`Action`算子就会有几个分支被调起。
+
+#### 2.2————第二种`foreachRDD`
+
+末端处理
+
+```scala
+// 2.foreachRDD : 直接对 RDD 进行操作, 末端处理
+format.foreachRDD( // StreamingContext 有一个独立的线程执行 while(true), 在主线程的代码是放到执行线程去执行
+  rdd => {
+    rdd.foreach(print)
+    // x...to Redis
+    // to MySQL
+    // call WebService
+  }
+)
+```
+
+**如果在其中调`rdd.map()`算子但并未调用`Action`算子，那么对应操作不会触发`DAGScheduler`也就不会被执行。**
+
+`foreach`其实是一种遍历集合数据的方式，那么现在是一个流一个时间线中`DStream`可以处理很多批次。`foreachRDD`就是处理每一个批次但是在某一个时间点某一个`Job`中，只能拿到一个处理`Job`中的这一个`RDD`。那么这一个`RDD`要怎么去处理？拿着`RDD`然后要调一个`Action`算子处理其中的逻辑所有的元素。
+
+`StreamingContext`有一个独立的线程执行`while(true)`，在主线程的代码是放到执行线程去执行。
+
+最终要明白，其实`Spark`的核心是`CORE`也就是`RDD`。`RDD`是有链的概念，一个`RDD`可以重复使用。一个数据可以有`N`种执行结果这是`RDD`的概念。
+
+#### 2.3————作用域
+
+`DStream`转换到`RDD`的作用域有三个级别
+
+- **`Application`**
+- **`Job`**
+- **`Task`**
+
+**`RDD`是一个单向链表，`DStream`也是一个单向链表**。如果把最后一个`DStream`给`scc`，那么`scc`可以启动一个独立的线程无`while(true) {最后一个DStream遍历}`。
+
+```scala
+var bc: Broadcast[List[Int]] = null
+var jobNum = 0
+println("Son of a bitch Syndra") // Application 级别
+val res: DStream[(String, Int)] = format.transform(
+  rdd => {
+    // 每 Job 级别递增, 是在 scc 的另一个 while(true) 线程中, Driver 端执行的
+    jobNum += 1
+    println(s"jobNum : $jobNum")
+    if (jobNum <= 1) {
+      bc = sc.broadcast((1 to 5).toList)
+    } else {
+      bc = sc.broadcast((6 to 15).toList)
+    }
+    // 无论多少次 Job 的运行都是相同的 bc, 只有 rdd 接受的函数, 才是 Executor 端的 才是 Task 端的
+    rdd.filter(x => {
+      bc.value.contains(x._2)
+    })
+  }
+)
+```
+
