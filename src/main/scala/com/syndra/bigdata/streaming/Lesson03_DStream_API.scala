@@ -1,7 +1,7 @@
 package com.syndra.bigdata.streaming
 
 import org.apache.spark.streaming.dstream.{DStream, ReceiverInputDStream}
-import org.apache.spark.streaming.{Duration, StreamingContext}
+import org.apache.spark.streaming.{Duration, State, StateSpec, StreamingContext}
 import org.apache.spark.{SparkConf, SparkContext}
 
 /**
@@ -12,11 +12,40 @@ object Lesson03_DStream_API {
     val conf: SparkConf = new SparkConf().setAppName("TEST_DStream_API").setMaster("local[8]")
     val sc: SparkContext = new SparkContext(conf)
     sc.setLogLevel("ERROR")
+    //    sc.setCheckpointDir("D:\\ideaProject\\bigdata\\bigdata-spark\\status")
     /*
     * Spark Streaming 100ms batch 1ms
     * Low Level API
     * */
-    val scc: StreamingContext = new StreamingContext(sc, Duration(1000)) // 最小粒度 约等于 : win大小为 1000, slide 滑动距离也是 1000
+    val ssc: StreamingContext = new StreamingContext(sc, Duration(1000)) // 最小粒度 约等于 : win大小为 1000, slide 滑动距离也是 1000
+
+    // 有状态计算
+    /*
+    * 状态 ← 历史数据
+    * join, 关联 历史的计算要存下来, 当前的计算最后还要合并到历史数据中
+    * 持久化下来, 历史的数据状态
+    * */
+
+    val data: ReceiverInputDStream[String] = ssc.socketTextStream("localhost", 8889)
+    val mapData: DStream[(String, Int)] = data.map(_.split(" ")).map(x => (x(0), 1))
+
+    mapData.mapWithState(StateSpec.function(
+      (k: String, nv: Option[Int], ov: State[Int]) => {
+        println(s"=====K: $k, NV: ${nv.getOrElse()}, OV: ${ov.getOption().getOrElse(0)}=====")
+        // K, V
+        (k, nv.getOrElse(0) + ov.getOption.getOrElse(0))
+      }
+    ))
+
+    /*
+    //    mapData.reduceByKey(_ + _)
+    val res: DStream[(String, Int)] = mapData.updateStateByKey((nv: Seq[Int], ov: Option[Int]) => {
+      // 每个批次的 Job 中, 对着 nv 求和
+      val cnt: Int = nv.count(_ > 0)
+      val oldVal: Int = ov.getOrElse(0)
+      Some(cnt + oldVal)
+    })
+    res.print()*/
 
     /*
     val rdd: RDD[Int] = sc.parallelize(1 to 10)
@@ -37,10 +66,12 @@ object Lesson03_DStream_API {
     * 数据源是 1s 中一个 hello 2个 hi
     * */
 
+    /*
     // 数据源的粗粒度 : 1s 来自于 StreamContext
-    val resource: ReceiverInputDStream[String] = scc.socketTextStream("localhost", 8889)
+    val resource: ReceiverInputDStream[String] = ssc.socketTextStream("localhost", 8889)
 
-    val format: DStream[(String, Int)] = resource.map(_.split(" ")).map(x => (x(0), x(1).toInt))
+    //    val format: DStream[(String, Int)] = resource.map(_.split(" ")).map(x => (x(0), x(1).toInt))
+    val format: DStream[(String, Int)] = resource.map(_.split(" ")).map(x => (x(0), 1))*/
 
     /* =============== DStream 转换到 RDD 级别的作用域  =============== */
     /*
@@ -67,7 +98,7 @@ object Lesson03_DStream_API {
     println("Son of a bitch Syndra") // Application 级别
     val res: DStream[(String, Int)] = format.transform(
       rdd => {
-        // 每 Job 级别递增, 是在 scc 的另一个 while(true) 线程中, Driver 端执行的
+        // 每 Job 级别递增, 是在 ssc 的另一个 while(true) 线程中, Driver 端执行的
         jobNum += 1
         println(s"jobNum : $jobNum")
         if (jobNum <= 1) {
@@ -140,7 +171,21 @@ object Lesson03_DStream_API {
     val win: DStream[(String, Int)] = format.window(Duration(5000)) // 先调整量
     val res1: DStream[(String, Int)] = win.reduceByKey(_ + _) // 在基于上一步的量上整体发生计算
 
-    val res: DStream[(String, Int)] = format.reduceByKeyAndWindow(_ + _, Duration(5000))
+    //    val res: DStream[(String, Int)] = format.reduceByKeyAndWindow(_ + _, Duration(5000))
+    // 调优 :
+    val res: DStream[(String, Int)] = format.reduceByKeyAndWindow(
+      // 计算新进入的 batch 的数据
+      (ov: Int, nv: Int) => {
+        // 所以 hello 并不会调这个函数, 只有 hi 才会
+        // 因为 hi 有两个所以会调起这个函数
+        println("被调起...")
+        ov + nv
+      },
+      // 挤出去的 batch 的数据
+      (ov: Int, oov: Int) => {
+        ov - oov
+      },
+      Duration(5000), Duration(1000))
     res.print()*/
 
     /*
@@ -171,7 +216,7 @@ object Lesson03_DStream_API {
       iter
     }).print()*/
 
-    scc.start()
-    scc.awaitTermination()
+    ssc.start()
+    ssc.awaitTermination()
   }
 }

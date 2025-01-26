@@ -274,7 +274,7 @@ object Lesson03_DStream_API {
     * Spark Streaming 100ms batch 1ms
     * Low Level API
     * */
-    val scc: StreamingContext = new StreamingContext(sc, Duration(1000))
+    val ssc: StreamingContext = new StreamingContext(sc, Duration(1000))
 
     /*
     * 1.需求 : 将计算延缓
@@ -285,7 +285,7 @@ object Lesson03_DStream_API {
     * */
 
     // 数据源的粗粒度 : 1s 来自于 StreamContext
-    val resource: ReceiverInputDStream[String] = scc.socketTextStream("localhost", 8889)
+    val resource: ReceiverInputDStream[String] = ssc.socketTextStream("localhost", 8889)
 
     val format: DStream[(String, Int)] = resource.map(_.split(" ")).map(x => (x(0), x(1).toInt))
     val res1s1Batch: DStream[(String, Int)] = format.reduceByKey(_ + _)
@@ -304,8 +304,8 @@ object Lesson03_DStream_API {
       iter
     }).print() /* 打印频率 : 5s 打印 1次...1s 打印 1次 */
 
-    scc.start()
-    scc.awaitTermination()
+    ssc.start()
+    ssc.awaitTermination()
   }
 }
 ```
@@ -346,7 +346,7 @@ val res1: DStream[(String, Int)] = win.reduceByKey(_ + _) // 在基于上一步�
 
 ```scala
 // 最小粒度 约等于 : win大小为 1000, slide 滑动距离也是 1000
-val scc: StreamingContext = new StreamingContext(sc, Duration(1000))
+val ssc: StreamingContext = new StreamingContext(sc, Duration(1000))
 ```
 
 `Spark`也是非常贴心的基于此的`API → reduceByKeyAndWindow()`
@@ -412,7 +412,7 @@ format.foreachRDD( // StreamingContext 有一个独立的线程执行 while(true
 - **`Job`**
 - **`Task`**
 
-**`RDD`是一个单向链表，`DStream`也是一个单向链表**。如果把最后一个`DStream`给`scc`，那么`scc`可以启动一个独立的线程无`while(true) {最后一个DStream遍历}`。
+**`RDD`是一个单向链表，`DStream`也是一个单向链表**。如果把最后一个`DStream`给`ssc`，那么`ssc`可以启动一个独立的线程无`while(true) {最后一个DStream遍历}`。
 
 ```scala
 var bc: Broadcast[List[Int]] = null
@@ -420,7 +420,7 @@ var jobNum = 0
 println("Son of a bitch Syndra") // Application 级别
 val res: DStream[(String, Int)] = format.transform(
   rdd => {
-    // 每 Job 级别递增, 是在 scc 的另一个 while(true) 线程中, Driver 端执行的
+    // 每 Job 级别递增, 是在 ssc 的另一个 while(true) 线程中, Driver 端执行的
     jobNum += 1
     println(s"jobNum : $jobNum")
     if (jobNum <= 1) {
@@ -435,4 +435,297 @@ val res: DStream[(String, Int)] = format.transform(
   }
 )
 ```
+
+------
+
+### 三、总结
+
+------
+
+#### 3.1————窗口的概念
+
+窗口可大可小，可以是一个批次，因为它是一个批次的流计算，一个批次就是一个窗口或者是连续多个批次，想一次计算的时候就一次计算。计算时是看历史的多个批次，还是一次计算的时候只看历史的一个批次。其实不设置`winodow`相关的参数它一个批次也是按照一个窗口来做的。只不过`Duration`的一个批次的大小就是一个窗口。
+
+#### 3.2————关于计算时的转换方式
+
+在转换的时候它有一个`foreachRDD`还有一个`transform`这么两类的转换操作。
+
+其中`foreachRDD`是触底的，其实都是最重要拿到`RDD`，只不过拿到`RDD`在`foreachRDD`中是最后必须有一个`Action`先前的`DStream`才能生效。
+
+如果是在`transform`中，其实是在把`RDD`传出去，但是中间的时候还可以调`Action`只不过是另外一条线。
+
+其实总的来说就是如果让`DStream`从头到尾执行的话，**`foreachRDD`中必须有`Action`，`transform`后续必须要有一个动作**。这就是两种方式的本质区别。
+
+------
+
+## 章节`36`：`Spark—Streaming`，整合`MQ—Kafka`开启
+
+------
+
+### 前言
+
+之前的操作只分析了`reveiver`模式，也就是所有数据均由`Spark`整理。这些批次数据是通过`Spark`跑一个单独的作业定时然后拉取回来。
+
+除此之外还有另外**两种模式**分别为
+
+- **`direct`**
+- **有状态计算**
+
+------
+
+### 一、有状态计算
+
+无论是一个批次窗口还是`N`个批次窗口，它只要产生`Job`的时候，是根据窗口大小拿过来的数据进行计算的，要么拿一个批次计算要么拿若干批次计算，那么在往前的历史那些数据它的价值以及状态就丢失了。
+
+所以无论窗口做的多大，它其实叫做无状态的。只是说这个`Job`一起的时候，我自己当前有一个状态历史是什么状态我并不知道。但是此时却往往需要有一个状态。
+
+#### 1.1————什么是状态？
+
+其实就是一个历史数据。也就是说新增的数据要参考历史数据做一个怎样的计算？
+
+此时整个数据是根据状态变化发生的。无论是`Flink`还是其他的流式计算只要涉及关联或`Join`的操作。
+
+##### 1.1.1—————什么是关联？
+
+历史的计算要存下来，当前的计算最后还要合到历史数据中。对此`Spark`原生虽然每个批次跑完后`Job`会消失，但可以通过持久化历史的数据状态，那么未来的计算就可以从其中取出。
+
+```scala
+// 第一次把这一个 key 的数据全拿过来, 放在内存中然后更新, 容易 OOM
+updateStateByKey(updateFunc: (Seq[V], Option[S]) => Option[S])
+```
+
+第一个参数为一批新数据，第二个参数为老数据的一个状态。
+
+```scala
+val data: ReceiverInputDStream[String] = ssc.socketTextStream("localhost", 8889)
+val mapData: DStream[(String, Int)] = data.map(_.split(" ")).map(x => (x(0), 1))
+//    mapData.reduceByKey(_ + _)
+val res: DStream[(String, Int)] = mapData.updateStateByKey((nv: Seq[Int], ov: Option[Int]) => {
+  // 每个批次的 Job 中, 对着 nv 求和
+  val cnt: Int = nv.count(_ > 0)
+  val oldVal: Int = ov.getOrElse(0)
+  Some(cnt + oldVal)
+})
+```
+
+但是它还需要一个持久化路径保存数据。此写法未来要写入到靠谱的持久层，例如：`HDFS`等等。
+
+```scala
+sc.setCheckpointDir("D:\\ideaProject\\bigdata\\bigdata-spark")
+```
+
+##### 1.1.2—————关于持久化
+
+此时，如果站在架构师的角度，关于持久化，有两个概念。
+
+- `persist`：存储在`BlockManager`，速度快
+
+- `checkpoint`：它是外界系统，成本高，但可靠性好，例如`HDFS`
+
+**也可以做`persist`调用后再做`checkpoint →`数据会在这两个地方都存储**。所以`updateStateByKey()`算子在这次计算完那个数据要输出最后结果的状态数据一定是先`persist`到本机，然后同时`checkpoint`到`HDFS`。下一批次计算时，其实没有动用`checkpoint`，而是动用了本机的`persist`的结果参与计算，最后植入一个单向输出到`checkpoint`中。
+
+#### 1.2————有状态计算下的窗口移动
+
+那么在窗口移动的过程中
+
+1. 可以每次重新计算窗口数据
+2. 也可以，加上进来的减去出去的
+
+有以上两种计算方式，这取决于**窗口的大小**和**移动的数据的量的变化**。显然第二种方式快，但是此方式也要求数据必须有状态。
+
+每秒拿出历史`5`条数据参与计算
+
+```scala
+// 数据源的粗粒度 : 1s 来自于 StreamContext
+val resource: ReceiverInputDStream[String] = ssc.socketTextStream("localhost", 8889)
+val format: DStream[(String, Int)] = resource.map(_.split(" ")).map(x => (x(0), 1))
+val res: DStream[(String, Int)] = format.reduceByKeyAndWindow(
+  (ov: Int, nv: Int) => {
+    ov + nv
+  }, Duration(5000), Duration(1000))
+res.print()
+```
+
+使用第二种方式计算窗口数据
+
+```scala
+// 数据源的粗粒度 : 1s 来自于 StreamContext
+val resource: ReceiverInputDStream[String] = ssc.socketTextStream("localhost", 8889)
+val format: DStream[(String, Int)] = resource.map(_.split(" ")).map(x => (x(0), 1))
+// 调优 :
+val res: DStream[(String, Int)] = format.reduceByKeyAndWindow(
+  // 计算新进入的 batch 的数据
+  (ov: Int, nv: Int) => {
+    println("被调起...")
+    ov + nv
+  },
+  // 挤出去的 batch 的数据
+  (ov: Int, oov: Int) => {
+    ov - oov
+  },
+  Duration(5000), Duration(1000))
+res.print()
+```
+
+在趋向于稳定时，第一个函数会被调起三次，第二个函数会被调起两次。因为是基于`key`做计算。
+
+`reduceByKey`是对`combineByKey`的封装，`combineByKey`有三个函数
+
+- 放入函数
+- 聚合函数
+- `combine`函数
+
+在处理时，其实要传给它一个函数。传给它的这个函数并不是放入函数。第一条记录怎么操作以及关于这个`key`的后续记录怎么操作是聚合函数。
+
+那么为什么第一个函数会被调起三次，其实`reduceByKey`会默认生成一个放入函数就是这个记录怎么卸载就怎么出去，我们写的这个
+
+```scala
+(ov: Int, nv: Int) => {
+  println("被调起...")
+  ov + nv
+}
+```
+
+函数是一个聚合函数。什么叫做聚合函数？
+
+也就是说某一笔记录它有两条的时候才能调到它
+
+```scala
+def reduceByKey(func: (V, V) => V): RDD[(K, V)] = self.withScope {
+  reduceByKey(defaultPartitioner(self), func)
+}
+
+def reduceByKey(partitioner: Partitioner, func: (V, V) => V): RDD[(K, V)] = self.withScope {
+  // 如果这个 key 有第二个 value 才会调用我们给定的函数 func
+  combineByKeyWithClassTag[V]((v: V) => v, func, func, partitioner)
+}
+```
+
+注意，`reduceByKey`调用`combineByKey`时，第一条记录并不是我们给定，而是函数自行提供。
+
+也就是说，如果是`reduceByKeyAndWindow`的话或未来调`reduceByKey`时，都要非常小心一件事情，就是传给他的函数并不是说每条记录都会去调起，它是一个聚合函数中间这个
+
+```scala
+(ov: Int, nv: Int) => {
+  println("被调起...")
+  ov + nv
+}
+```
+
+函数它并不是放入函数。除非自行实现`combineByKey`，
+
+#### 1.3————调优
+
+1. 全亮有状态，所以依赖持久化
+2. 调优，窗口有状态（**历史状态**对**窗口滑动**的**进入**，**出去**进行计算），依赖持久化
+3. 如果窗口计算，不需要调优、不需要持久化，但是每次都是窗口量全量的计算
+4. 对`reduceByKey`的函数要非常清楚
+5. 窗口有状态调优计算：逻辑是否会正确
+6. 企业中最终使用`mapWithState()`来做全量有状态计算
+
+**一个比较极端的例子**： `5min 1`个窗口量`2s`刷新大屏，`2s`的`Slide`滑动范围那计算量是`5min`的积压，可能计算不过来，权衡了一下，虽然`checkpoint`有损耗，但是对于`5min`积压的量的计算快很多。
+
+#### 1.4————`mapWithState`算子
+
+由`key`对应的那一条记录，以及历史状态，逐条更新。总比`updateStateByKey`的取出一个`key`的所有数据放内存中然后更新要好。
+
+区别是`mapWithState`更新`KV`，`updateStateByKey`更新一个`K`的所有数据。
+
+```scala
+val data: ReceiverInputDStream[String] = ssc.socketTextStream("localhost", 8889)
+val mapData: DStream[(String, Int)] = data.map(_.split(" ")).map(x => (x(0), 1))
+
+mapData.mapWithState(StateSpec.function(
+  (k: String, nv: Option[Int], ov: State[Int]) => {
+    println(s"=====K: $k, NV: ${nv.getOrElse()}, OV: ${ov.getOption().getOrElse(0)}=====")
+    // K, V
+    (k, nv.getOrElse(0) + ov.getOption.getOrElse(0))
+  }
+))
+```
+
+和`updateStateByKey`不同的是，`mapWithState`每次都会调我们给定的函数。
+
+**其实每一条记录会调一次函数和一批数据调一次函数这是俩概念。**
+
+------
+
+### 二、什么是`Kafka`？
+
+```mermaid
+graph LR
+	Stream(Spark-Streaming) --> Rec(receiver)
+	
+	Rec --> A(Spark启动一个Job维护数据的拉取和保存)
+	Rec --> B(计算Job)
+	
+	Stream --> Dire(direct)
+	Dire --> C(计算Job)
+	
+	MQ(MQ <br> Kafka <br> 存储) --> C
+```
+
+```mermaid
+%%{ init: {'flowchart':{'curve':'basis'}}}%%
+graph TB
+
+	subgraph broker
+		Par[partition 0]
+	end	
+	
+	subgraph broker_1
+		Par_1[partition 0]
+	end
+	
+	Pro([producer]) --> Con([consumer])
+	Pro --> Par
+	Pro --> Par_1
+	
+	subgraph topic
+		par[partition 0] -.-> Par
+		par1[partition 1] -.-> Par_1
+	end
+	
+	ZK(Zookeeper <br> 分布式问题 <br> 老版本中，分布式角色的状态数据都交给 <br> Zookeeper)
+```
+
+#### 2.1————重复消费
+
+`Kafka`比较值钱的就是**持久化**。为了解决重复消费的问题，引入了`group`的概念，也是根据需求推导出的。
+
+#### 2.2————有序问题
+
+那么如果生产的顺序和消费顺序不一致，也就是怎么解决有序的问题？
+
+- `Kafka`中只能保证分区有序，因为在任何并行度分布情况下，节点间协商数据的顺序成本很高，所以它就放弃了节点间的顺序，即不保证节点间的顺序
+
+在分布式下，还有`AKF`原则。
+
+#### 2.3————`Zookeeper`的分布式问题
+
+因为在分布式情况下，在所谓的微服务中，强调进程或角色的无状态，也就是说你别把你自己干的事儿都放到你的内存中，如果挂了那么你曾经干到哪别人都不知道。
+
+老版本中，`consumer`的`offset`、元数据，状态信息都放到了`Zookeeper`中，那么会发现中间的访问频率不是很高，然而`group`的`IO`和通信频率一定会极高。`consumer`端一定会依赖`Zookeeper`的响应速度。如果`consumer`挂掉后再重启会参照`offset`继续正确消费，记录没有重复消费的概念。所以会对`Zookeeper`压力很大。
+
+不光`Kafka`，早期`HBase`等等技术都把所有的状态元数据信息以及频繁变化的数据都依赖于`Zookeeper`，因为他们开始的时候认为`Zokeeper`解决分布协调问题的确很好，大家也应该这么去用它。但是随着时间的推移发现了`Zookeeper`扛不住了。因为它是一种简单的框架运行时可用的主从概念，他所有的增删改的操作是压到主然后再去做统一视图两端的提交。所以速度其实再快再快在并发情况下，它也是扛不住的，因为主是一台，它不是真的`Paxos`那种无主集群。
+
+其实真正的无主集群也不可能达到特别快，这种消息同步一致性的问题就像区块链一样，它绝对不可能达到毫秒级，一个人一个操作就更上去了反而它速度更慢。
+
+所以此时`Zookeeper`可能会成两端拖后腿的事请，也可以考虑将状态等信息写入到`Redis`中，但引入一个新技术可能会带来另一个问题，`Redis`的可靠性，使用一台`Redis`不开启持久化，那么它挂掉之后状态数据全没了，整个公司就瘫了因为你并不知道上次处理到哪条记录，如果消息重复消费的话有多给别人打了十万块钱，此时`Redis`需要做主从。
+
+其实`Redis`还是一种滞后的最终一致性，有可能丢数据。可以开启强一致性这会面临增加延迟的问题。那么如果团队没人会`Redis`，这将会面临扩招新的团队以及运维成本的问题。
+
+`MySQL`的元数据是自行维护在`mysql`库中，那么`Kafka`也可以这么做，用过一个`topic`维护元数据信息从而降低对`Zookeeper`的依赖只要性能`hold`住。
+
+在架构师的角度来看，一句话，别让它干不属于它的事。一个架构师知道这个技术什么特征就用在什么地方，如果你知道这个技术的特点，却不用它，知道它的缺点反而在缺点上做了很多事，那么我认为这不是一个合格的架构师。
+
+`Spark—Streaming`结合`Kafka`，必问的一个问题：`offset`怎么维护？直接维护到`Kafka`中，顶多在维护一个什么时候写`offset`，是读了数据写，还是读了数据之后处理数据，处理完再写，还是读了数据处理的时候处理完要发生事务整体数据写成功之后再去写。
+
+只不过要找一个合适的时间点就有不同的语义了。是最多消费一次还是至少消费的还是绝对只消费一次？这就是比较细粒度的决策需要根据业务调整。
+
+------
+
+## 章节`37`：`Spark—Streaming`，源码分析，流式微批任务的调度原理
+
+------
 
