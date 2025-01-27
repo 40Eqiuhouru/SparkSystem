@@ -725,7 +725,4 @@ graph TB
 
 ------
 
-## 章节`37`：`Spark—Streaming`，源码分析，流式微批任务的调度原理
-
-------
-
+# 后续详见`Spark—Streaming_源码.md`。
