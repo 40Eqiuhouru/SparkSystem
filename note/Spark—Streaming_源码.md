@@ -376,3 +376,286 @@ Thread.sleep(5000)
 
 ------
 
+## 章节`38`：`Spark—Streaming`
+
+------
+
+### 一、`StreamingonKafka`的整合
+
+```scala
+package com.syndra.bigdata.streaming
+
+import org.apache.kafka.clients.consumer.{ConsumerConfig, ConsumerRecord}
+import org.apache.kafka.common.serialization.StringDeserializer
+import org.apache.spark.SparkConf
+import org.apache.spark.streaming.dstream.{DStream, InputDStream}
+import org.apache.spark.streaming.kafka010.{ConsumerStrategies, KafkaUtils, LocationStrategies}
+import org.apache.spark.streaming.{Duration, StreamingContext}
+
+/**
+ * 在Kafka数据源上做Streaming计算
+ */
+object Lesson05_Spark_Kafka_Consumer {
+  def main(args: Array[String]): Unit = {
+    // 写一个Spark-StreamingOnKafka
+    val conf: SparkConf = new SparkConf().setMaster("local[10]").setAppName("StreamingOnKafka")
+    val ssc: StreamingContext = new StreamingContext(conf, Duration(1000))
+
+    // 如何得到Kafka的DStream?
+    val map: Map[String, Object] = Map[String, Object](
+      (ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "hadoop04:9092"),
+      (ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, classOf[StringDeserializer]),
+      (ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, classOf[StringDeserializer]),
+      (ConsumerConfig.GROUP_ID_CONFIG, "t6"),
+      (ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest"),
+      (ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "TRUE")
+    )
+
+    val kafka: InputDStream[ConsumerRecord[String, String]] = KafkaUtils.createDirectStream[String, String](
+      ssc,
+      LocationStrategies.PreferConsistent,
+      ConsumerStrategies.Subscribe[String, String](List("test"), map)
+    )
+
+    // 通过KafkaUtils得到的第一个DStream要先去转换下, 其实这个DStream就是consumer@poll回来的records
+    // 将record转换成业务逻辑的元素 : 只提取key, value
+    val dStream: DStream[(String, (String, String, Int, Long))] = kafka.map(
+      record => {
+        val t: String = record.topic()
+        val p: Int = record.partition()
+        val o: Long = record.offset()
+        val k: String = record.key()
+        val v: String = record.value()
+        (k, (v, t, p, o))
+      }
+    )
+    dStream.print()
+
+    ssc.start()
+    ssc.awaitTermination()
+  }
+}
+
+```
+
+**值得注意的是：**通过`KafkaUtils`得到的第一个`DStream`要先去转换下, 其实这个`DStream`就是`consumer@poll`回来的`records`。将`record`转换成业务逻辑的元素`→`只提取`key,value`。
+
+以下为消费结果
+
+```shell
+-------------------------------------------
+Time: 1738062570000 ms
+-------------------------------------------
+(null,(hello Syndra,test,1,0))
+(item1,(action1,test,1,1))
+(item1,(action2,test,1,2))
+(item1,(action3,test,1,3))
+(item1,(action1,test,1,4))
+(item1,(action2,test,1,5))
+(item1,(action3,test,1,6))
+(item1,(action1,test,1,7))
+(item1,(action2,test,1,8))
+(item1,(action3,test,1,9))
+...
+
+-------------------------------------------
+Time: 1738062571000 ms
+-------------------------------------------
+```
+
+第二个`Job`没有输出，潜台词就是在`SparkonKafka`默认情况下，第一次的时候会尽量拉回所有的。显然这种行为就会有风险。
+
+- 冷启动，它会造成一次大量拉取
+- 每个批次的冷启动也会拉取很多数据，尽量拉取更多数据
+
+```scala
+// 约束消费能力, 每次一条拉取
+(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, "1")
+```
+
+但是此参数并不生效，要在`SparkConf()`中配置。
+
+```properties
+// 未来运行,上一个Job拉的多下一个Job就拉少点,反压的方式
+spark.streaming.backpressure.enabled
+// 冷启动拉取的数据量
+spark.streaming.backpressure.initialRate
+// 处理完当前的批次
+spark.streaming.stopGracefullyOnShutdown
+```
+
+在以上配置后，再次运行会发现
+
+```shell
+-------------------------------------------
+Time: 1738064933000 ms
+-------------------------------------------
+(null,(Fucking Syndra,test,0,0))
+(null,(hello Syndra,test,2,0))
+(null,(hello Syndra,test,1,0))
+
+-------------------------------------------
+Time: 1738064934000 ms
+-------------------------------------------
+(item2,(action1,test,0,1))
+(item3,(action1,test,2,1))
+(item1,(action1,test,1,1))
+
+-------------------------------------------
+Time: 1738064935000 ms
+-------------------------------------------
+(item2,(action2,test,0,2))
+(item3,(action2,test,2,2))
+(item1,(action2,test,1,2))
+```
+
+也就是说，这些配置中，比较强硬的是
+
+```scala
+conf.set("spark.streaming.kafka.maxRatePerPartition", "1")
+conf.set("spark.streaming.backpressure.initialRate", "5")
+```
+
+如果以上配置同时开启，最终要参考`maxRatePerPartition`每次一个分区拉取多少条。
+
+但此时自动提交`offset`为`true`，即拉取数据已经把`offset`更新了然后再去计算，如果计算失败了那很抱歉，`offset`已经被更新完了肯定会丢数据。
+
+真正企业级应用时，一定会改为`false`。
+
+------
+
+### 二、`Kafka`如何维护`offset`？
+
+通俗来说，如果一个`Job`起来后，它有三个`Task`，三个`consumer`，是不是每个自己去维护自己的`offset`。每个`consumer`最清楚自己的消费的是哪个`topic`哪个`partition`以及拿到的`offset`是多少。那么它只要消费成功了就把`offset`更新一下，找地方存起来。也就是在分布式情况下，每个`consumer`自行维护`offset`。
+
+维护`offset`应该放在哪合适？批计算什么时候跑起来的谁去控制？以批次为单位的离线计算，通过`Driver`控制，且批次间是线性阻塞的。由此得出结论**`Driver`控制`Job`，`Job`中有批次的概念。也就是`Driver`维护`offset`。**
+
+1. 关闭失败重试（并不好）
+2. 解耦：文件的方式（最古老且系统间影响最小，尤其银行中）
+3. 开启事务
+   1. `OK`：如果不是记录、表级的锁，把事务和锁放的非常非常松的情况下，并行这件事才行
+   2. `repartition:1`：在某一步让它们变成一个分区，所有行为不破坏`Job`的完整性
+4. `collect`：一个事务中既先去把数据写成功，然后再把`offset`写成功，最后再`commit`
+
+#### 2.1————面试题：消费`Kafka offset`的管理上有几种方式？
+
+参照以上。
+
+------
+
+### 三、维护`offset`是为了什么？哪个时间点用起你维护的`offset`?
+
+是在`Application`重启时，`Driver`重启时。
+
+第一个版本
+
+```scala
+// 完成业务代码后_V1
+// 因为提交offset代码写到了main线程中, 其实没有起到作用
+kafka.foreachRDD(
+  rdd => {
+    // Driver端可以拿到offset
+    val ranges: Array[OffsetRange] = rdd.asInstanceOf[HasOffsetRanges].offsetRanges
+    // 闭包, 通过KafkaUtils得到的第一个DStream向上转型, 提交offset
+    kafka.asInstanceOf[CanCommitOffsets].commitAsync(ranges)
+  }
+)
+```
+
+第二个版本
+
+```scala
+// 完成业务代码后_V2
+var ranges: Array[OffsetRange] = null
+// 正确的, 将提交offset的代码放到DStream对象的接收函数中, 那么未来再调度线程中, 这个函数每个Job有机会调用一次, 伴随着提交offset
+kafka.foreachRDD(
+  rdd => {
+    // Driver端可以拿到offset
+    ranges = rdd.asInstanceOf[HasOffsetRanges].offsetRanges
+    // 闭包, 通过KafkaUtils得到的第一个DStream向上转型, 提交offset
+    //        kafka.asInstanceOf[CanCommitOffsets].commitAsync(ranges)
+  }
+)
+kafka.asInstanceOf[CanCommitOffsets].commitAsync(ranges)
+```
+
+第三个版本
+
+```scala
+// 完成业务代码后_V3
+var ranges: Array[OffsetRange] = null
+kafka.foreachRDD(
+  rdd => {
+    // Driver端可以拿到offset
+    ranges = rdd.asInstanceOf[HasOffsetRanges].offsetRanges
+    // 闭包, 通过KafkaUtils得到的第一个DStream向上转型, 提交offset
+    kafka.asInstanceOf[CanCommitOffsets].commitAsync(ranges, new OffsetCommitCallback {
+      // 异步提交offset, 调完后回来可能成功也可能失败
+      // callback有一个缺陷 : 异步提交的方式略微有延迟
+      //
+      override def onComplete(offsets: util.Map[TopicPartition, OffsetAndMetadata], exception: Exception): Unit = {
+        if (offsets != null) {
+          ranges.foreach(println)
+          println("----------")
+          val iter: util.Iterator[TopicPartition] = offsets.keySet().iterator()
+          while (iter.hasNext) {
+            val k: TopicPartition = iter.next()
+            val v: OffsetAndMetadata = offsets.get(k)
+            println(s"${k.partition()}...${v.offset()}")
+          }
+        }
+      }
+    })
+  }
+)
+```
+
+维护`offset`的另一个语义是什么：持久化。
+
+在使用第三方维护数据时，`kafka`数据源要修改，以及`MySQL`
+
+```scala
+val kafka: InputDStream[ConsumerRecord[String, String]] = KafkaUtils.createDirectStream[String, String](
+  ssc,
+  LocationStrategies.PreferConsistent,
+  // 访问数据库, 取曾经持久化的offset
+  Map(
+    (new TopicPartition("from mysql topic", 0), 33),
+    (new TopicPartition("from mysql topic", 1), 32)
+  )
+)
+
+var ranges: Array[OffsetRange] = null
+kafka.foreachRDD(
+  rdd => {
+    // Driver端可以拿到offset
+    ranges = rdd.asInstanceOf[HasOffsetRanges].offsetRanges
+    // 闭包, 通过KafkaUtils得到的第一个DStream向上转型, 提交offset
+    kafka.asInstanceOf[CanCommitOffsets].commitAsync(ranges, new OffsetCommitCallback {
+      // 异步提交offset, 调完后回来可能成功也可能失败
+      // callback有一个缺陷 : 异步提交的方式略微有延迟
+      // 1.维护/持久化offset到kafka
+      override def onComplete(offsets: util.Map[TopicPartition, OffsetAndMetadata], exception: Exception): Unit = {
+        if (offsets != null) {
+          ranges.foreach(println)
+          println("----------")
+          val iter: util.Iterator[TopicPartition] = offsets.keySet().iterator()
+          while (iter.hasNext) {
+            val k: TopicPartition = iter.next()
+            val v: OffsetAndMetadata = offsets.get(k)
+            println(s"${k.partition()}...${v.offset()}")
+          }
+        }
+      }
+    })
+    // 2.维护/持久化到MySQL异步维护或同步
+    // 同步
+    val local: Array[(String, String)] = rdd.map(r => (r.key(), r.value())).reduceByKey(_ + _).collect()
+    // 开启事务, 提交数据, 提交offset, commit
+  }
+)
+```
+
+------
+
+### 四、总结
