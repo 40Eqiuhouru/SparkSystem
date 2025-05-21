@@ -1,3 +1,5 @@
+[TOC]
+
 # Spark 框架
 
 ------
@@ -1165,13 +1167,13 @@ override def getDependencies: Seq[Dependency[_]] = {
 
 ------
 
-## 章节`6`：Spark-CORE，wordcount 案例源码分析，图解
+## 章节`6`：`Spark-CORE`，`wordcount`案例源码分析，图解
 
-**图解详见 Idea 工程中 image 目录。**
+**图解详见`Idea`工程中`image`目录。**
+
+![Spark源码分析](D:\ideaProject\bigdata\bigdata-spark\image\Spark源码分析_裁剪.png)
 
 ------
-
-
 
 ## 章节`7`：Spark-CORE，集合操作 API，pvuv 分析，RDD 源码分析
 

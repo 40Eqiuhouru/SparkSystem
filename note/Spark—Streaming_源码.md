@@ -1,3 +1,7 @@
+[TOC]
+
+------
+
 # `Spark—Streaming`源码分析
 
 ------
@@ -547,7 +551,7 @@ conf.set("spark.streaming.backpressure.initialRate", "5")
 
 是在`Application`重启时，`Driver`重启时。
 
-第一个版本
+**第一个版本**
 
 ```scala
 // 完成业务代码后_V1
@@ -562,7 +566,7 @@ kafka.foreachRDD(
 )
 ```
 
-第二个版本
+**第二个版本**
 
 ```scala
 // 完成业务代码后_V2
@@ -579,7 +583,7 @@ kafka.foreachRDD(
 kafka.asInstanceOf[CanCommitOffsets].commitAsync(ranges)
 ```
 
-第三个版本
+**第三个版本**
 
 ```scala
 // 完成业务代码后_V3
@@ -659,3 +663,5 @@ kafka.foreachRDD(
 ------
 
 ### 四、总结
+
+通过`while`实现微批处理，但并不是真正意义上的微批。
